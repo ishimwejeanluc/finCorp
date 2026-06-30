@@ -1,0 +1,28 @@
+# Node
+node_modules/
+npm-debug.log*
+dist/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+.terraform.lock.hcl
+
+# Secrets / env
+.env
+.env.*
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+.DS_Store

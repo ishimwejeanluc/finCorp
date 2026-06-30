@@ -1,0 +1,46 @@
+name: dr-restore
+
+# Cross-region Disaster Recovery — manual failover.
+#
+# Restores the database in the DR region (eu-west-2) from the latest AWS Backup
+# cross-region recovery point. Run this AFTER simulating the region failure
+# (deleting the primary instance). This is workflow_dispatch ONLY — restoring a
+# database is a deliberate, destructive action, never automatic on push.
+#
+# Requires the same OIDC role + repo Variables as build-and-push.yml, plus:
+#   BACKUP_ROLE_ARN  = terraform output backup_role_arn
+
+on:
+  workflow_dispatch:
+    inputs:
+      new_db_identifier:
+        description: "Identifier for the restored instance"
+        required: true
+        default: "fincorp-db-restored"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  restore:
+    name: restore-in-dr-region
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_GHA_ROLE_ARN }}
+          aws-region: eu-west-2
+
+      - name: Restore from cross-region backup
+        env:
+          PROJECT: fincorp
+          DR_REGION: eu-west-2
+          NEW_DB_ID: ${{ github.event.inputs.new_db_identifier }}
+          BACKUP_ROLE_ARN: ${{ vars.BACKUP_ROLE_ARN }}
+        run: |
+          chmod +x scripts/dr-restore.sh
+          ./scripts/dr-restore.sh

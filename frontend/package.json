@@ -1,0 +1,19 @@
+{
+  "name": "shopnow-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.js",
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "4.21.0",
+    "node-fetch": "3.3.2",
+    "pino": "9.4.0",
+    "pino-http": "10.3.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

@@ -1,0 +1,15 @@
+node_modules
+dist
+npm-debug.log*
+.npm
+.git
+.gitignore
+.env
+.env.*
+*.md
+.vscode
+.idea
+Dockerfile
+.dockerignore
+coverage
+.nyc_output

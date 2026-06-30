@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fincorp-app
+  namespace: fincorp
+  labels:
+    app.kubernetes.io/part-of: fincorp
+data:
+  BACKEND_URL: "http://backend.fincorp.svc.cluster.local:8000"
+  LOG_LEVEL:   "info"

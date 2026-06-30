@@ -1,0 +1,78 @@
+# Local-only stack. In AWS, postgres -> RDS, redis -> ElastiCache.
+# This compose file exists to verify the frontend <-> backend <-> data wiring
+# before we pay for any AWS infra.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: shopnow
+      POSTGRES_PASSWORD: shopnow_local_pw
+      POSTGRES_DB: shopnow
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # *.sql files here run in alphabetical order on first init only.
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shopnow -d shopnow"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - shopnow
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - shopnow
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: shopnow/backend:local
+    environment:
+      POSTGRES_DSN: postgresql://shopnow:shopnow_local_pw@postgres:5432/shopnow
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - shopnow
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: shopnow/frontend:local
+    environment:
+      BACKEND_URL: http://backend:8000
+      PORT: "3000"
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - shopnow
+
+networks:
+  shopnow:
+    driver: bridge
+
+volumes:
+  pgdata:
