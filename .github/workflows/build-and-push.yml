@@ -55,7 +55,21 @@ jobs:
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
 
+      - name: Skip if this immutable tag already exists
+        id: exists
+        run: |
+          if aws ecr describe-images \
+               --repository-name fincorp/${{ matrix.service }} \
+               --image-ids imageTag=${{ env.IMAGE_TAG }} \
+               --region ${{ env.AWS_REGION }} >/dev/null 2>&1; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::fincorp/${{ matrix.service }}:${{ env.IMAGE_TAG }} already exists — skipping build/scan/push (immutable, nothing to do)."
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Get CodeArtifact token + endpoints
+        if: steps.exists.outputs.found != 'true'
         id: ca
         run: |
           DOMAIN="${{ vars.CODEARTIFACT_DOMAIN }}"
@@ -71,8 +85,10 @@ jobs:
           echo "pip_host=${HOST}/pypi/pypi-proxy/simple/" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v3
+        if: steps.exists.outputs.found != 'true'
 
       - name: Build image (deps pulled through CodeArtifact)
+        if: steps.exists.outputs.found != 'true'
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
@@ -88,7 +104,8 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
 
       - name: Trivy scan (FAIL on HIGH/CRITICAL)
-        uses: aquasecurity/trivy-action@0.28.0
+        if: steps.exists.outputs.found != 'true'
+        uses: aquasecurity/trivy-action@v0.30.0
         with:
           image-ref: ${{ env.ECR_REGISTRY }}/fincorp/${{ matrix.service }}:${{ env.IMAGE_TAG }}
           format: sarif
@@ -98,15 +115,17 @@ jobs:
           exit-code: "1"          # <-- the constraint: build fails on HIGH/CRITICAL
 
       - name: Upload Trivy results to Security tab
-        if: always()
+        if: always() && steps.exists.outputs.found != 'true'
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-${{ matrix.service }}.sarif
           category: trivy-${{ matrix.service }}
 
       - name: Push immutable image
-        # Reached only if Trivy passed. ECR rejects the push if this exact tag
-        # already exists (IMMUTABLE) — a tag can never be overwritten.
+        # Reached only if the tag is new AND Trivy passed. ECR would reject an
+        # overwrite anyway (IMMUTABLE) — the existence check above turns a
+        # same-commit re-run into a clean skip instead of a failed push.
+        if: steps.exists.outputs.found != 'true'
         run: docker push ${{ env.ECR_REGISTRY }}/fincorp/${{ matrix.service }}:${{ env.IMAGE_TAG }}
 
   deploy:

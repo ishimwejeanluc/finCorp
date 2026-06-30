@@ -21,8 +21,12 @@ resource "aws_ecr_repository" "this" {
    existing tag with `ImageTagAlreadyExistsException`. A tag is permanently bound
    to one image digest — what you scanned is byte-for-byte what you deploy.
 
-> Re-running the pipeline on the same commit is a safe no-op (push rejected). A
-> code change forces a new tag. This is the FinCorp "immutable artifact" requirement.
+> A code change forces a new tag. Re-running the pipeline on the same commit is a
+> clean skip: the workflow first checks ECR for the tag (`describe-images`) and, if
+> it already exists, bypasses build/scan/push. (Even without that guard, ECR would
+> reject the re-push because the repo is `IMMUTABLE` — the check just turns that
+> hard failure into a graceful skip.) This is the FinCorp "immutable artifact"
+> requirement.
 
 ## Two layers of scanning
 
