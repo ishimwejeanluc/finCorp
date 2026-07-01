@@ -34,7 +34,7 @@ jobs:
     name: build-${{ matrix.service }}
     runs-on: ubuntu-latest
     strategy:
-      fail-fast: true
+      fail-fast: false   # let backend and frontend scan independently (one failing must not cancel the other)
       matrix:
         include:
           - service: backend
@@ -103,23 +103,38 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
 
-      - name: Trivy scan (FAIL on HIGH/CRITICAL)
+      # Scan once to a table report AND gate on it. Trivy writes the report file
+      # before applying exit-code, so the file exists even when the gate fails.
+      - name: Trivy scan (report + GATE on HIGH/CRITICAL)
         if: steps.exists.outputs.found != 'true'
         uses: aquasecurity/trivy-action@v0.36.0
+        env:
+          TRIVY_SKIP_VERSION_CHECK: "true"
         with:
           image-ref: ${{ env.ECR_REGISTRY }}/fincorp/${{ matrix.service }}:${{ env.IMAGE_TAG }}
-          format: sarif
-          output: trivy-${{ matrix.service }}.sarif
+          format: table
+          output: trivy-${{ matrix.service }}.txt
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"          # <-- the constraint: build fails on HIGH/CRITICAL
 
-      - name: Upload Trivy results to Security tab
+      # Runs even when the gate fails (always) so the full CVE list is visible
+      # on the run's Summary page — package, installed → fixed version, CVE id.
+      - name: Publish Trivy report to job summary
         if: always() && steps.exists.outputs.found != 'true'
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: trivy-${{ matrix.service }}.sarif
-          category: trivy-${{ matrix.service }}
+        run: |
+          {
+            echo "## 🔎 Trivy — ${{ matrix.service }}"
+            echo "Image \`fincorp/${{ matrix.service }}:${{ env.IMAGE_TAG }}\` — HIGH/CRITICAL, fixable only"
+            echo ""
+            echo '```'
+            if [ -s trivy-${{ matrix.service }}.txt ]; then
+              cat trivy-${{ matrix.service }}.txt
+            else
+              echo "No fixable HIGH/CRITICAL vulnerabilities found. ✅"
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Push immutable image
         # Reached only if the tag is new AND Trivy passed. ECR would reject an

@@ -40,8 +40,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PATH="/home/app/.local/bin:${PATH}"
 
-# Runtime libs only (libpq for asyncpg, curl for healthcheck)
-RUN apt-get update && apt-get install --no-install-recommends -y \
+# Runtime libs only (libpq for asyncpg, curl for healthcheck).
+# apt-get upgrade patches base-image OS package CVEs flagged by Trivy.
+RUN apt-get update \
+    && apt-get upgrade -y \
+    && apt-get install --no-install-recommends -y \
         libpq5 \
         curl \
     && rm -rf /var/lib/apt/lists/* \
@@ -52,7 +55,11 @@ WORKDIR /app
 
 COPY --from=builder /wheels /wheels
 COPY requirements.txt .
-RUN pip install --no-index --find-links=/wheels -r requirements.txt \
+# Upgrade pip/setuptools first — the base image ships older versions with known
+# HIGH CVEs (e.g. setuptools CVE-2024-6345 / CVE-2025-47273). Then install the
+# app wheels offline.
+RUN pip install --no-cache-dir --upgrade pip setuptools \
+    && pip install --no-index --find-links=/wheels -r requirements.txt \
     && rm -rf /wheels
 
 COPY --chown=app:app app/ ./app/
