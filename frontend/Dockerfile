@@ -32,8 +32,10 @@ FROM node:20-alpine AS runtime
 ENV NODE_ENV=production \
     PORT=3000
 
+# Patch OS packages (fixes libssl3/libcrypto3 HIGH CVEs flagged by Trivy).
 # wget is in busybox on alpine; use it for the healthcheck (no curl needed)
-RUN addgroup -S -g 1001 app \
+RUN apk upgrade --no-cache \
+    && addgroup -S -g 1001 app \
     && adduser -S -u 1001 -G app app
 
 WORKDIR /app
@@ -48,7 +50,12 @@ RUN --mount=type=cache,target=/root/.npm \
         npm config set "//${NPM_REGISTRY_HOST}/:_authToken" "${TOKEN}"; \
     fi; \
     if [ -f package-lock.json ]; then npm ci --omit=dev; else npm install --omit=dev --no-audit --no-fund; fi \
-    && npm cache clean --force
+    && npm cache clean --force \
+    # The runtime runs `node server.js` and never needs npm. Remove the bundled
+    # global npm/npx/corepack — that is where Trivy's cross-spawn/glob/minimatch/
+    # tar HIGH CVEs live, so dropping it clears them from the final image.
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+              /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
 
 COPY --chown=app:app --from=builder /app/dist ./dist
 COPY --chown=app:app server.js ./

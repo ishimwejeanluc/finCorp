@@ -47,9 +47,9 @@ variable "node_desired_size" {
 }
 
 variable "github_repo" {
-  description = "GitHub repository allowed to assume the CI role, in 'owner/name' form. Scopes the OIDC trust policy."
+  description = "GitHub repository allowed to assume the CI role, in 'owner/name' form. Scopes the OIDC trust policy. Case-sensitive — must match the repo's exact case (the OIDC 'sub' claim preserves it)."
   type        = string
-  default     = "ishimwejeanluc/fincorp"
+  default     = "ishimwejeanluc/finCorp"
 }
 
 variable "backup_schedule" {
