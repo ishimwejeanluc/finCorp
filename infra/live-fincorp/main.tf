@@ -8,14 +8,16 @@ terraform {
     tls    = { source = "hashicorp/tls", version = "~> 4.0" }
   }
 
-  # Remote state: reuse the account-global state bucket + lock table, but a
-  # NEW key so the FinCorp lab never collides with shopnow-eks state.
+  # Remote state in the FinCorp-owned bucket (created by infra/bootstrap).
+  # Locking uses native S3 lockfiles (use_lockfile) — no DynamoDB table needed.
+  # Set the bucket name after running bootstrap, or pass via
+  # `terraform init -backend-config="bucket=fincorp-tfstate-<acct>"`.
   backend "s3" {
-    bucket         = "shopnow-tfstate-497924967546"
-    key            = "fincorp/terraform.tfstate"
-    region         = "eu-west-1"
-    dynamodb_table = "shopnow-tfstate-lock"
-    encrypt        = true
+    bucket       = "fincorp-tfstate-497924967546"
+    key          = "fincorp/terraform.tfstate"
+    region       = "eu-west-1"
+    use_lockfile = true
+    encrypt      = true
   }
 }
 
@@ -85,8 +87,7 @@ module "github_oidc" {
 module "codeartifact" {
   source = "../modules/codeartifact"
 
-  project      = var.project
-  ci_role_arns = [module.github_oidc.ci_role_arn]
+  project = var.project
 }
 
 # Let the CI role drive kubectl against the cluster (deploy step).

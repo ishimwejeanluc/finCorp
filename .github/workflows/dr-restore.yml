@@ -17,6 +17,10 @@ on:
         description: "Identifier for the restored instance"
         required: true
         default: "fincorp-db-restored"
+      repoint_app:
+        description: "Re-point the EKS app at the restored DB (off if the primary region/cluster is truly down)"
+        type: boolean
+        default: true
 
 permissions:
   id-token: write
@@ -44,3 +48,50 @@ jobs:
         run: |
           chmod +x scripts/dr-restore.sh
           ./scripts/dr-restore.sh
+
+      - name: Re-point the app at the restored database
+        if: ${{ inputs.repoint_app }}
+        env:
+          PRIMARY_REGION: eu-west-1
+          DR_REGION: eu-west-2
+          CLUSTER: fincorp
+          NS: fincorp
+          NEW_DB_ID: ${{ github.event.inputs.new_db_identifier }}
+          CRED_SECRET_ID: fincorp/rds/credentials
+        run: |
+          set -euo pipefail
+
+          # 1) Endpoint of the restored instance (DR region).
+          NEW_HOST=$(aws rds describe-db-instances --db-instance-identifier "$NEW_DB_ID" \
+            --region "$DR_REGION" --query 'DBInstances[0].Endpoint.Address' --output text)
+          echo "Restored endpoint: $NEW_HOST"
+
+          # 2) Master credentials are preserved by the restore — reuse them.
+          #    URL-encode so special chars in the password don't break the DSN.
+          NEW_DSN="$(aws secretsmanager get-secret-value --secret-id "$CRED_SECRET_ID" \
+            --region "$PRIMARY_REGION" --query SecretString --output text \
+            | NEW_HOST="$NEW_HOST" python3 -c '
+          import json, os, sys
+          from urllib.parse import quote
+          d = json.load(sys.stdin)
+          user = quote(d["username"], safe="")
+          pw   = quote(d["password"], safe="")
+          host = os.environ["NEW_HOST"]
+          print(f"postgresql://{user}:{pw}@{host}:{d.get(\"port\",5432)}/{d.get(\"dbname\",\"fincorp\")}")')"
+          echo "::add-mask::$NEW_DSN"
+
+          # 3) Point kubectl at the cluster (still up in this simulation).
+          aws eks update-kubeconfig --name "$CLUSTER" --region "$PRIMARY_REGION"
+
+          # 4) Patch only the DSN; preserve the existing REDIS_URL.
+          REDIS_URL=$(kubectl -n "$NS" get secret fincorp-db \
+            -o jsonpath='{.data.REDIS_URL}' | base64 -d || true)
+          kubectl -n "$NS" create secret generic fincorp-db \
+            --from-literal=POSTGRES_DSN="$NEW_DSN" \
+            --from-literal=REDIS_URL="$REDIS_URL" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+          # 5) Restart the backend so it reconnects to the restored DB.
+          kubectl -n "$NS" rollout restart deployment/backend
+          kubectl -n "$NS" rollout status deployment/backend --timeout=180s
+          echo "::notice::App re-pointed to restored DB at ${NEW_HOST}"

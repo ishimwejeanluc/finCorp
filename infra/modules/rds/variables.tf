@@ -18,9 +18,9 @@ variable "private_subnet_ids" {
 }
 
 variable "engine_version" {
-  description = "Postgres engine version. List with: aws rds describe-db-engine-versions --engine postgres"
+  description = "Postgres engine version. List with: aws rds describe-db-engine-versions --engine postgres --region <r>"
   type        = string
-  default     = "16.4"
+  default     = "16.9"
 }
 
 variable "instance_class" {

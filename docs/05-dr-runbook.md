@@ -68,9 +68,21 @@ SELECT count(*) FROM <your_table>;
 ✅ Record the elapsed time from step 1 → here. For a `db.t3.micro` this is
 typically **10–20 minutes**, inside the 30-minute RTO.
 
-## 4. (Optional) Re-point the app
-Update the `fincorp-db` Secret / DSN to the restored endpoint and restart the
-backend, or fail traffic over per your wider DR plan.
+## 4. Re-point the app (automatic)
+When run via the **dr-restore** workflow with `repoint_app = true` (the default),
+the cutover is automatic: after the restore it reads the restored endpoint, reuses
+the preserved master credentials from Secrets Manager, rewrites only the
+`POSTGRES_DSN` in the `fincorp-db` Kubernetes Secret (keeping `REDIS_URL`), and
+restarts the backend so it reconnects to the recovered database.
+
+Untick `repoint_app` if the primary region/cluster is genuinely down (then you'd
+fail traffic over per your wider DR plan instead). The equivalent manual steps:
+```bash
+NEW_HOST=$(aws rds describe-db-instances --db-instance-identifier fincorp-db-restored \
+  --region eu-west-2 --query 'DBInstances[0].Endpoint.Address' --output text)
+# rebuild the DSN with NEW_HOST, update the fincorp-db Secret, then:
+kubectl -n fincorp rollout restart deployment/backend
+```
 
 ---
 

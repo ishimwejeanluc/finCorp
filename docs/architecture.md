@@ -57,7 +57,7 @@ k8s/                       Kubernetes manifests (namespace: fincorp)
 .github/workflows/         build-and-push.yml, dr-restore.yml
 scripts/dr-restore.sh      DR failover automation
 infra/
-  bootstrap/               remote-state bucket + lock (shared, pre-existing)
+  bootstrap/               creates fincorp-tfstate bucket + lock table
   live-fincorp/            the stack (providers, wiring, DR network)
   modules/
     network/ ecr/ elasticache/ rds/ eks/*

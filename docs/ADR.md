@@ -37,13 +37,13 @@ deploy always pins an exact digest, never a moving `latest`.
 auditable-supply-chain requirement — without baking secrets into image layers.
 **Trade-off:** builds depend on CodeArtifact availability; mitigated by the cache.
 
-## ADR-6: Reuse the state bucket with a new key; new `fincorp` namespace
-**Decision:** keep the existing `shopnow-tfstate` bucket + lock table, use key
-`fincorp/terraform.tfstate`; rename everything to `fincorp` with VPC `10.20.0.0/16`.
-**Why:** zero state collision with the shopnow-eks lab and no extra bootstrap,
-while resource names/CIDRs never clash in the shared account.
-**Trade-off:** the two labs share one state bucket (account-global infra) — fine,
-state keys are isolated.
+## ADR-6: Dedicated `fincorp` state backend + new `fincorp` namespace
+**Decision:** `infra/bootstrap` creates a FinCorp-owned `fincorp-tfstate-<acct>`
+bucket + `fincorp-tfstate-lock` table (key `fincorp/terraform.tfstate`); everything
+is renamed to `fincorp` with VPC `10.20.0.0/16`.
+**Why:** complete isolation from the shopnow-eks lab — separate state bucket, lock
+table, resource names, and CIDRs — so nothing clashes in a shared account.
+**Trade-off:** one extra bootstrap apply to create the bucket/table. One-time.
 
 ## ADR-7: Minimal DR network in eu-west-2
 **Decision:** create a small VPC + 2 subnets + DB subnet group in the DR region.

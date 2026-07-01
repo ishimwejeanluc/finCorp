@@ -29,7 +29,9 @@ spec:
       serviceAccountName: backend
       containers:
         - name: backend
-          image: 497924967546.dkr.ecr.eu-west-1.amazonaws.com/fincorp/backend:backend-20260517T162305Z-90273d65
+          # Placeholder tag — ALWAYS overridden at deploy time with the commit
+          # SHA by `kubectl set image` (pipeline) or deploy-eks-k8s.sh --image-tag.
+          image: 497924967546.dkr.ecr.eu-west-1.amazonaws.com/fincorp/backend:placeholder
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

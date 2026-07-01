@@ -105,7 +105,7 @@ jobs:
 
       - name: Trivy scan (FAIL on HIGH/CRITICAL)
         if: steps.exists.outputs.found != 'true'
-        uses: aquasecurity/trivy-action@v0.30.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.ECR_REGISTRY }}/fincorp/${{ matrix.service }}:${{ env.IMAGE_TAG }}
           format: sarif
@@ -134,21 +134,25 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_GHA_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      - name: Update kubeconfig
-        run: aws eks update-kubeconfig --name ${{ vars.EKS_CLUSTER }} --region ${{ vars.AWS_REGION }}
-
-      - name: Roll out the new (commit-pinned) images
+      # scripts/deploy-eks-k8s.sh is the single source of truth for deploys
+      # (used identically here and locally): updates kubeconfig, creates the
+      # namespace + fincorp-db Secret, renders the image tag, and applies the
+      # manifests + ingress declaratively. The LB controller is a one-time local
+      # setup (--ensure-lb-controller), so it is NOT installed here.
+      - name: Deploy to EKS (idempotent, self-bootstrapping)
         env:
-          REGISTRY: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com
-          NS: ${{ vars.K8S_NAMESPACE }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          CLUSTER_NAME: ${{ vars.EKS_CLUSTER }}
+          NAMESPACE: ${{ vars.K8S_NAMESPACE }}
+          ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
         run: |
-          kubectl -n "$NS" set image deployment/backend  backend=$REGISTRY/fincorp/backend:${{ github.sha }}
-          kubectl -n "$NS" set image deployment/frontend frontend=$REGISTRY/fincorp/frontend:${{ github.sha }}
-          kubectl -n "$NS" rollout status deployment/backend  --timeout=180s
-          kubectl -n "$NS" rollout status deployment/frontend --timeout=180s
+          chmod +x scripts/deploy-eks-k8s.sh
+          ./scripts/deploy-eks-k8s.sh --image-tag "${{ github.sha }}" --include-ingress

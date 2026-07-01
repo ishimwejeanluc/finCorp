@@ -46,15 +46,15 @@ Separate lab, **same AWS account** as the k8s lab → everything moves to a new 
 | Project slug | `shopnow-eks` | `fincorp` |
 | Primary region | `eu-west-1` | `eu-west-1` |
 | DR region | — | `eu-west-2` |
-| TF state bucket | `shopnow-tfstate-497924967546` | reuse (account-global infra) |
+| TF state bucket | `shopnow-tfstate-497924967546` | **`fincorp-tfstate-<acct>`** (own bucket) |
 | TF state **key** | `shopnow-eks/terraform.tfstate` | **`fincorp/terraform.tfstate`** |
-| TF lock table | `shopnow-tfstate-lock` | reuse |
+| TF lock table | `shopnow-tfstate-lock` | **`fincorp-tfstate-lock`** |
 | VPC CIDR | `10.1.0.0/16` | **`10.20.0.0/16`** |
 | EKS cluster name | `shopnow-eks` | **`fincorp-eks`** |
 | ECR repos | `shopnow/backend,frontend` | **`fincorp/backend,frontend`** |
 | Live stack dir | `infra/live-eks/` | **`infra/live-fincorp/`** |
 
-> The state **bucket + lock table** are shared account infra (`prevent_destroy`). Reuse them with a **new state key** — zero collision risk, no extra bootstrap. (Optional alternative: a dedicated `infra/bootstrap-fincorp/` creating its own bucket.)
+> `infra/bootstrap` creates a **FinCorp-owned** `fincorp-tfstate-<acct>` bucket + `fincorp-tfstate-lock` table (`prevent_destroy`), with key `fincorp/terraform.tfstate` — fully isolated from the shopnow-eks lab's state.
 
 ---
 
@@ -215,7 +215,7 @@ The 30-min RTO is **restore time**, not copy time — the cross-region copy runs
 | Decision | Default chosen | Note |
 |---|---|---|
 | DB engine | **Standard RDS Postgres** | Cleanest 30-min restore; matches "RDS database" |
-| TF state | **Reuse bucket, new key** | No extra bootstrap; zero collision |
+| TF state | **Dedicated `fincorp-tfstate` bucket + lock** | Full isolation from shopnow-eks |
 | Redis | **Keep (app-only)** | App needs it to run; excluded from DR scope |
 
 > Flag any of these to change before implementation begins.

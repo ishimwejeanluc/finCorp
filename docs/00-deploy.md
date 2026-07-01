@@ -4,8 +4,13 @@ Order of operations to stand up the whole FinCorp lab.
 
 ## Prerequisites
 - Terraform ≥ 1.6, AWS CLI v2, kubectl, Docker (for local builds), `jq`.
-- AWS account with the shared state bucket already bootstrapped
-  (`infra/bootstrap` — reused from the shopnow lab).
+- The Terraform remote-state backend bootstrapped:
+  ```bash
+  cd infra/bootstrap && terraform init && terraform apply
+  # creates fincorp-tfstate-<account-id> (S3) + fincorp-tfstate-lock (DynamoDB)
+  ```
+  Then set the bucket name in `infra/live-fincorp/main.tf`'s backend block (or pass
+  `-backend-config`).
 
 ## 1. Provision infrastructure
 ```bash
@@ -28,23 +33,34 @@ Settings → Secrets and variables → Actions → **Variables** (see
 `EKS_CLUSTER=fincorp`, `K8S_NAMESPACE=fincorp`, `BACKUP_ROLE_ARN`.
 
 ## 3. Install the AWS Load Balancer Controller (one-time)
-Annotate its ServiceAccount with `terraform output lb_controller_role_arn` and
-install via Helm (kube-system). Required for the ALB ingress.
-
-## 4. First app deploy
-Create the namespace + app Secret/ConfigMap, then apply manifests:
+The ALB ingress needs the controller running in the cluster. Install it once with
+the deploy script (Helm, IRSA wired automatically):
 ```bash
-kubectl apply -f k8s/00-namespace.yaml
-# Create the fincorp-db Secret from the RDS secret:
-aws secretsmanager get-secret-value --secret-id fincorp/rds/credentials \
-  --query SecretString --output text   # build the K8s Secret from this DSN
-kubectl apply -f k8s/        # configmap, deployments, services, ingress
+./scripts/deploy-eks-k8s.sh --ensure-lb-controller
 ```
+This also does a full deploy using the latest image already in ECR. (Or install
+via Helm yourself, annotating the ServiceAccount with
+`terraform output lb_controller_role_arn`.)
 
-## 5. Run the pipeline
-Push to `main` (or run **build-and-push** manually). It builds through
-CodeArtifact, fails on HIGH/CRITICAL via Trivy, pushes immutable `:<git-sha>`
-images, and rolls them out to EKS.
+## 4. App deploy — the pipeline does it
+There is **no separate bootstrap**. Push to `main` (or run **build-and-push**).
+The pipeline builds through CodeArtifact, fails on HIGH/CRITICAL via Trivy, pushes
+immutable `:<git-sha>` images, then **calls `scripts/deploy-eks-k8s.sh`** — the
+single source of truth for deploys. The script:
+
+1. updates kubeconfig,
+2. creates the `fincorp` namespace + `fincorp-db` Secret (from Secrets Manager) if absent,
+3. renders the manifests' `:placeholder` tag to the commit SHA,
+4. `kubectl apply`s deployments, services, and ingress declaratively.
+
+Because `kubectl apply` is declarative, every later run changes only what actually
+changed: unchanged manifests report `unchanged` (no rollout); only the image field —
+which moves with each commit SHA — triggers a rolling update. Re-running on the same
+commit is a no-op (the build is skipped and apply finds nothing to change).
+
+> The same script runs locally for manual deploys — see `--help`. The CI run does
+> NOT pass `--ensure-lb-controller` (no Helm on the runner; the controller is a
+> one-time setup from step 3).
 
 ## 6. DR drill
 Follow the [DR runbook](05-dr-runbook.md).

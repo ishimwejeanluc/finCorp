@@ -16,6 +16,10 @@ RDS_SECRET_ID="${RDS_SECRET_ID:-fincorp/rds/credentials}"
 REDIS_SECRET_ID="${REDIS_SECRET_ID:-fincorp/redis/credentials}"
 SKIP_SECRET="${SKIP_SECRET:-0}"
 INCLUDE_INGRESS="${INCLUDE_INGRESS:-1}"
+# LB controller install is a one-time, helm-based cluster setup. Off by default
+# so CI (which has no helm and shouldn't re-install it every deploy) can apply the
+# ingress without it. Run once locally with --ensure-lb-controller.
+ENSURE_LB_CONTROLLER="${ENSURE_LB_CONTROLLER:-0}"
 
 usage() {
   cat <<'EOF'
@@ -28,24 +32,26 @@ Options:
   --region <aws-region>         AWS region (default: eu-west-1)
   --cluster <cluster-name>      EKS cluster name (default: fincorp)
   --namespace <namespace>       Kubernetes namespace (default: fincorp)
-  --image-tag <tag>             If set, run `kubectl set image` to override
-                                the tag in the running Deployments (handy when
-                                push-ecr.sh just produced a fresh timestamp tag)
+  --image-tag <tag>             Image tag to deploy (rendered into both
+                                Deployments before apply). Default: latest tag
+                                pushed to ECR.
   --account-id <id>             AWS account ID for image URI (default: auto-detect)
   --rds-secret-id <id>          Secrets Manager ID for Postgres creds
   --redis-secret-id <id>        Secrets Manager ID for Redis creds
   --skip-secret                 Skip creating/updating the fincorp-db Secret
-  --include-ingress             Also apply k8s/06-ingress.yaml
+  --include-ingress             Apply k8s/06-ingress.yaml (default: on)
+  --no-ingress                  Do not apply the ingress
+  --ensure-lb-controller        Install/upgrade the AWS LB Controller (helm, one-time)
   -h, --help                    Show this help
 
 Environment variable equivalents:
-  AWS_REGION, CLUSTER_NAME, NAMESPACE, IMAGE_TAG, ACCOUNT_ID,
-  RDS_SECRET_ID, REDIS_SECRET_ID, SKIP_SECRET=1, INCLUDE_INGRESS=1
+  AWS_REGION, CLUSTER_NAME, NAMESPACE, IMAGE_TAG, ACCOUNT_ID, RDS_SECRET_ID,
+  REDIS_SECRET_ID, SKIP_SECRET=1, INCLUDE_INGRESS=1, ENSURE_LB_CONTROLLER=1
 
 Examples:
-  scripts/deploy-eks-k8s.sh
-  scripts/deploy-eks-k8s.sh --image-tag backend-20260517T162305Z-90273d65
-  scripts/deploy-eks-k8s.sh --include-ingress --skip-secret
+  scripts/deploy-eks-k8s.sh --image-tag "$GIT_SHA"          # used by the pipeline
+  scripts/deploy-eks-k8s.sh --ensure-lb-controller          # first-time cluster setup
+  scripts/deploy-eks-k8s.sh --skip-secret                   # redeploy latest image
 EOF
 }
 
@@ -106,6 +112,57 @@ print(f"rediss://default:{token}@{host}:{port}/0")
     --from-literal=POSTGRES_DSN="$pg_dsn" \
     --from-literal=REDIS_URL="$redis_url" \
     --dry-run=client -o yaml | kubectl apply -f -
+}
+
+# Echo the image tag to deploy for a repo. Uses --image-tag if given, else the
+# most recently pushed tag in ECR (handy for local runs after a pipeline build).
+deploy_image_tag() {
+  local repo="$1"
+  if [[ -n "$IMAGE_TAG" ]]; then
+    echo "$IMAGE_TAG"
+    return
+  fi
+  local t
+  t="$(aws ecr describe-images --repository-name "$repo" --region "$AWS_REGION" \
+        --query 'sort_by(imageDetails,&imagePushedAt)[-1].imageTags[0]' \
+        --output text 2>/dev/null || true)"
+  if [[ -z "$t" || "$t" == "None" ]]; then
+    echo "ERROR: no --image-tag given and no images found in $repo." >&2
+    echo "       Run the pipeline (or push-ecr.sh) first, or pass --image-tag." >&2
+    exit 1
+  fi
+  echo "$t"
+}
+
+# Render the placeholder tag in the deployment manifests to the real image and
+# apply declaratively. Rendering BEFORE apply (instead of apply-then-set-image)
+# keeps it idempotent and avoids momentarily rolling out the non-pulling
+# :placeholder tag. Unchanged manifests are left untouched by kubectl apply.
+render_and_apply() {
+  local k8s_dir="$1" tmp btag ftag
+  tmp="$(mktemp -d)"
+  cp "$k8s_dir"/*.yaml "$tmp"/
+
+  btag="$(deploy_image_tag "$BACKEND_REPO")"
+  ftag="$(deploy_image_tag "$FRONTEND_REPO")"
+  echo "Backend image tag:  $btag"
+  echo "Frontend image tag: $ftag"
+
+  sed "s#${BACKEND_REPO}:placeholder#${BACKEND_REPO}:${btag}#" \
+    "$k8s_dir/02-backend-deployment.yaml" > "$tmp/02-backend-deployment.yaml"
+  sed "s#${FRONTEND_REPO}:placeholder#${FRONTEND_REPO}:${ftag}#" \
+    "$k8s_dir/04-frontend-deployment.yaml" > "$tmp/04-frontend-deployment.yaml"
+
+  kubectl apply -f "$tmp/02-backend-deployment.yaml"
+  kubectl apply -f "$tmp/03-backend-service.yaml"
+  kubectl apply -f "$tmp/04-frontend-deployment.yaml"
+  kubectl apply -f "$tmp/05-frontend-service.yaml"
+
+  if bool_true "$INCLUDE_INGRESS"; then
+    kubectl apply -f "$tmp/06-ingress.yaml"
+  fi
+
+  rm -rf "$tmp"
 }
 
 ensure_lb_controller() {
@@ -187,6 +244,14 @@ parse_args() {
         INCLUDE_INGRESS="1"
         shift
         ;;
+      --no-ingress)
+        INCLUDE_INGRESS="0"
+        shift
+        ;;
+      --ensure-lb-controller)
+        ENSURE_LB_CONTROLLER="1"
+        shift
+        ;;
       -h|--help)
         usage
         exit 0
@@ -240,31 +305,18 @@ main() {
     echo "Skipping secret creation/update (SKIP_SECRET=$SKIP_SECRET)"
   fi
 
-  echo "Applying deployments and services..."
-  kubectl apply -f "$k8s_dir/02-backend-deployment.yaml"
-  kubectl apply -f "$k8s_dir/03-backend-service.yaml"
-  kubectl apply -f "$k8s_dir/04-frontend-deployment.yaml"
-  kubectl apply -f "$k8s_dir/05-frontend-service.yaml"
-
-  if [[ -n "$IMAGE_TAG" ]]; then
-    local backend_image frontend_image
-    backend_image="$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$BACKEND_REPO:$IMAGE_TAG"
-    frontend_image="$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$FRONTEND_REPO:$IMAGE_TAG"
-
-    echo "Updating deployment images to tag: $IMAGE_TAG"
-    kubectl -n "$NAMESPACE" set image deployment/backend "backend=$backend_image"
-    kubectl -n "$NAMESPACE" set image deployment/frontend "frontend=$frontend_image"
-  fi
-
-  if bool_true "$INCLUDE_INGRESS"; then
+  # One-time cluster setup (helm). Apply ingress always; install controller only
+  # when explicitly asked (it provisions the ALB the ingress needs).
+  if bool_true "$ENSURE_LB_CONTROLLER"; then
     ensure_lb_controller
-    echo "Applying ingress manifest..."
-    kubectl apply -f "$k8s_dir/06-ingress.yaml"
   fi
+
+  echo "Rendering image tags and applying deployments/services/ingress..."
+  render_and_apply "$k8s_dir"
 
   echo "Waiting for rollouts..."
-  kubectl -n "$NAMESPACE" rollout status deployment/backend
-  kubectl -n "$NAMESPACE" rollout status deployment/frontend
+  kubectl -n "$NAMESPACE" rollout status deployment/backend  --timeout=180s
+  kubectl -n "$NAMESPACE" rollout status deployment/frontend --timeout=180s
 
   echo "Deployment complete. Current resources:"
   kubectl -n "$NAMESPACE" get pods,svc,ingress

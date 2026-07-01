@@ -6,9 +6,9 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: shopnow
-      POSTGRES_PASSWORD: shopnow_local_pw
-      POSTGRES_DB: shopnow
+      POSTGRES_USER: fincorp
+      POSTGRES_PASSWORD: fincorp_local_pw
+      POSTGRES_DB: fincorp
     ports:
       - "5432:5432"
     volumes:
@@ -16,12 +16,12 @@ services:
       # *.sql files here run in alphabetical order on first init only.
       - ./db/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U shopnow -d shopnow"]
+      test: ["CMD-SHELL", "pg_isready -U fincorp -d fincorp"]
       interval: 5s
       timeout: 3s
       retries: 10
     networks:
-      - shopnow
+      - fincorp
 
   redis:
     image: redis:7-alpine
@@ -34,15 +34,15 @@ services:
       timeout: 3s
       retries: 10
     networks:
-      - shopnow
+      - fincorp
 
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    image: shopnow/backend:local
+    image: fincorp/backend:local
     environment:
-      POSTGRES_DSN: postgresql://shopnow:shopnow_local_pw@postgres:5432/shopnow
+      POSTGRES_DSN: postgresql://fincorp:fincorp_local_pw@postgres:5432/fincorp
       REDIS_URL: redis://redis:6379/0
     ports:
       - "8000:8000"
@@ -52,13 +52,13 @@ services:
       redis:
         condition: service_healthy
     networks:
-      - shopnow
+      - fincorp
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    image: shopnow/frontend:local
+    image: fincorp/frontend:local
     environment:
       BACKEND_URL: http://backend:8000
       PORT: "3000"
@@ -68,10 +68,10 @@ services:
       backend:
         condition: service_healthy
     networks:
-      - shopnow
+      - fincorp
 
 networks:
-  shopnow:
+  fincorp:
     driver: bridge
 
 volumes:

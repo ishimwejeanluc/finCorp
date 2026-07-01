@@ -149,6 +149,18 @@ data "aws_iam_policy_document" "ci" {
     actions   = ["iam:PassRole"]
     resources = ["arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:role/${var.project}-backup-*"]
   }
+
+  # Read the app credential secrets so the pipeline can build the K8s Secret
+  # (deploy) and rebuild the DSN on failover (DR re-point).
+  statement {
+    sid     = "ReadAppSecrets"
+    effect  = "Allow"
+    actions = ["secretsmanager:GetSecretValue"]
+    resources = [
+      "arn:${data.aws_partition.current.partition}:secretsmanager:*:${data.aws_caller_identity.current.account_id}:secret:${var.project}/rds/credentials-*",
+      "arn:${data.aws_partition.current.partition}:secretsmanager:*:${data.aws_caller_identity.current.account_id}:secret:${var.project}/redis/credentials-*",
+    ]
+  }
 }
 
 resource "aws_iam_role_policy" "ci" {
