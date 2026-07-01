@@ -13,6 +13,9 @@
     "pino": "9.4.0",
     "pino-http": "10.3.0"
   },
+  "overrides": {
+    "path-to-regexp": "0.1.13"
+  },
   "engines": {
     "node": ">=20.0.0"
   }

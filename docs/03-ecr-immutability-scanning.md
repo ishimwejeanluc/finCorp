@@ -48,6 +48,16 @@ aws ecr describe-image-scan-findings \
   --region eu-west-1
 ```
 
+## Accepted-risk exceptions (`.trivyignore`)
+
+The workflow reads [`.trivyignore`](../.trivyignore) (via the `trivyignores`
+input). It's the escape hatch for a CVE that is genuinely **not exploitable** in
+this app and **cannot yet be upgraded** — each entry needs a justification comment,
+an owner, and an `exp:` expiry so exceptions can't live forever. The file currently
+ignores **nothing** (everything flagged so far was fixed by upgrading:
+`starlette 1.3.1`, `path-to-regexp 0.1.13`), so the gate stays fully strict.
+Prefer fixing over ignoring.
+
 ## Why the build fails on High/Critical
 
 `exit-code: "1"` in the Trivy step makes the job (and therefore the whole

@@ -116,6 +116,7 @@ jobs:
           output: trivy-${{ matrix.service }}.txt
           severity: HIGH,CRITICAL
           ignore-unfixed: true
+          trivyignores: .trivyignore   # documented accepted-risk exceptions (currently none)
           exit-code: "1"          # <-- the constraint: build fails on HIGH/CRITICAL
 
       # Runs even when the gate fails (always) so the full CVE list is visible
