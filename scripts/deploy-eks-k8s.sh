@@ -181,12 +181,17 @@ ensure_lb_controller() {
   fi
 
   role_name="${CLUSTER_NAME}-lb-controller"
-  role_arn="$(aws iam get-role --role-name "$role_name" \
-    --query 'Role.Arn' --output text 2>/dev/null || true)"
-
-  if [[ -z "$role_arn" || "$role_arn" == "None" ]]; then
-    echo "IRSA role '$role_name' not found - run \`terraform apply\` in infra/live-eks first." >&2
-    exit 1
+  # Resolve the IRSA role ARN WITHOUT iam:GetRole (the CI role doesn't have it,
+  # so the old `aws iam get-role` lookup failed in the pipeline with AccessDenied).
+  # Use an explicit override if provided, else construct it from the account id
+  # (sts:GetCallerIdentity is always allowed). Terraform creates this role as
+  # ${project}-lb-controller. Locally this yields the identical ARN.
+  if [[ -n "${LB_CONTROLLER_ROLE_ARN:-}" ]]; then
+    role_arn="$LB_CONTROLLER_ROLE_ARN"
+  else
+    local account_id
+    account_id="$(aws sts get-caller-identity --query Account --output text)"
+    role_arn="arn:aws:iam::${account_id}:role/${role_name}"
   fi
 
   helm repo add eks https://aws.github.io/eks-charts >/dev/null 2>&1 || true
