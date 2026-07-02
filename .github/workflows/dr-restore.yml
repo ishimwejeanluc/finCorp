@@ -82,7 +82,9 @@ jobs:
           user = quote(d["username"], safe="")
           pw   = quote(d["password"], safe="")
           host = os.environ["NEW_HOST"]
-          print(f"postgresql://{user}:{pw}@{host}:{d.get(\"port\",5432)}/{d.get(\"dbname\",\"fincorp\")}")')"
+          port = d.get("port", 5432)
+          db   = d.get("dbname", "fincorp")
+          print(f"postgresql://{user}:{pw}@{host}:{port}/{db}")')"
           echo "::add-mask::$NEW_DSN"
 
           # 3) Point kubectl at the cluster (still up in this simulation).

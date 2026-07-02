@@ -150,6 +150,17 @@ data "aws_iam_policy_document" "ci" {
     resources = ["arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:role/${var.project}-backup-*"]
   }
 
+  # Idempotent DR restore: delete a prior restored instance so the drill can
+  # re-run (REPLACE / unhealthy-state recovery). Scoped to the RESTORED name
+  # pattern only — the primary '${var.project}-db' is deliberately NOT matched,
+  # so CI can never delete the production database.
+  statement {
+    sid       = "RdsDeleteRestoredOnly"
+    effect    = "Allow"
+    actions   = ["rds:DeleteDBInstance"]
+    resources = ["arn:${data.aws_partition.current.partition}:rds:*:${data.aws_caller_identity.current.account_id}:db:${var.project}-db-restored*"]
+  }
+
   # Read the app credential secrets so the pipeline can build the K8s Secret
   # (deploy) and rebuild the DSN on failover (DR re-point).
   statement {
