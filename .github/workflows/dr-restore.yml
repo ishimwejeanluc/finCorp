@@ -17,6 +17,10 @@ on:
         description: "Identifier for the restored instance"
         required: true
         default: "fincorp-db-restored"
+      replace:
+        description: "If the restored instance already exists, delete it and restore fresh (otherwise it's a no-op when already present)"
+        type: boolean
+        default: false
       repoint_app:
         description: "Re-point the EKS app at the restored DB (off if the primary region/cluster is truly down)"
         type: boolean
@@ -44,6 +48,7 @@ jobs:
           PROJECT: fincorp
           DR_REGION: eu-west-2
           NEW_DB_ID: ${{ github.event.inputs.new_db_identifier }}
+          REPLACE: ${{ github.event.inputs.replace }}
           BACKUP_ROLE_ARN: ${{ vars.BACKUP_ROLE_ARN }}
         run: |
           chmod +x scripts/dr-restore.sh

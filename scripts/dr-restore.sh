@@ -22,14 +22,60 @@ DR_REGION="${DR_REGION:-eu-west-2}"
 DR_VAULT="${DR_VAULT:-${PROJECT}-backup-dr}"
 NEW_DB_ID="${NEW_DB_ID:-${PROJECT}-db-restored}"
 DB_SUBNET_GROUP="${DB_SUBNET_GROUP:-${PROJECT}-dr-db-subnets}"
+# REPLACE=1 forces a fresh restore even if the target already exists (delete first).
+REPLACE="${REPLACE:-0}"
 : "${BACKUP_ROLE_ARN:?Set BACKUP_ROLE_ARN (terraform output backup_role_arn)}"
 
 log() { printf '\033[1;36m[dr-restore]\033[0m %s\n' "$*"; }
+
+report_endpoint() {
+  local ep
+  ep=$(aws rds describe-db-instances --db-instance-identifier "$NEW_DB_ID" \
+    --region "$DR_REGION" --query 'DBInstances[0].Endpoint.Address' --output text 2>/dev/null || echo "pending")
+  log "Recovered instance: $NEW_DB_ID"
+  log "Endpoint:           $ep (port 5432)"
+}
+
+is_true() { [[ "${1:-}" == "1" || "${1:-}" == "true" || "${1:-}" == "TRUE" || "${1:-}" == "yes" ]]; }
+
+delete_target() {
+  log "Deleting existing '$NEW_DB_ID'..."
+  aws rds delete-db-instance --db-instance-identifier "$NEW_DB_ID" \
+    --skip-final-snapshot --delete-automated-backups --region "$DR_REGION" >/dev/null || true
+  aws rds wait db-instance-deleted --db-instance-identifier "$NEW_DB_ID" --region "$DR_REGION" || true
+}
 
 START_EPOCH=$(date +%s)
 log "Region:        $DR_REGION"
 log "Vault:         $DR_VAULT"
 log "New instance:  $NEW_DB_ID"
+
+# 0) Idempotency: converge safely if the target instance already exists.
+CUR=$(aws rds describe-db-instances --db-instance-identifier "$NEW_DB_ID" \
+  --region "$DR_REGION" --query 'DBInstances[0].DBInstanceStatus' --output text 2>/dev/null || true)
+if [[ -n "$CUR" && "$CUR" != "None" ]]; then
+  log "Target '$NEW_DB_ID' already exists (status: $CUR)."
+  if is_true "$REPLACE"; then
+    log "REPLACE set — replacing it with a fresh restore."
+    delete_target
+  else
+    case "$CUR" in
+      available)
+        log "Already restored — nothing to do (idempotent). Set REPLACE=1 to force a fresh restore."
+        report_endpoint
+        exit 0 ;;
+      creating|modifying|backing-up|configuring-*|starting|maintenance|renaming|upgrading|storage-optimization|resetting-master-credentials)
+        log "A restore is already in progress — waiting for it to become available..."
+        aws rds wait db-instance-available --db-instance-identifier "$NEW_DB_ID" --region "$DR_REGION"
+        log "Now available (idempotent)."
+        report_endpoint
+        exit 0 ;;
+      *)
+        log "Existing instance is in unhealthy state '$CUR' — recreating it."
+        delete_target ;;
+    esac
+  fi
+fi
 
 # 1) Latest RDS recovery point in the DR vault (already copied cross-region).
 log "Finding latest RDS recovery point..."
@@ -98,12 +144,7 @@ while true; do
 done
 
 # 5) Report the recovered endpoint.
-ENDPOINT=$(aws rds describe-db-instances --db-instance-identifier "$NEW_DB_ID" \
-  --region "$DR_REGION" \
-  --query 'DBInstances[0].Endpoint.Address' --output text 2>/dev/null || echo "pending")
 TOTAL=$(( $(date +%s) - START_EPOCH ))
-
 log "RESTORE COMPLETE in ${TOTAL}s (RTO target: 1800s)"
-log "Recovered instance: $NEW_DB_ID"
-log "Endpoint:           $ENDPOINT (port 5432)"
+report_endpoint
 log "Next: attach a security group / re-point the app, then validate row counts."
