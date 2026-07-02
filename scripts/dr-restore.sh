@@ -52,13 +52,22 @@ META=$(aws backup get-recovery-point-restore-metadata \
   --backup-vault-name "$DR_VAULT" --recovery-point-arn "$RP_ARN" \
   --region "$DR_REGION" --query RestoreMetadata --output json)
 
-# Drop DBSnapshotIdentifier: AWS Backup rejects it in restore metadata (the
-# source snapshot comes from --recovery-point-arn). Override the identifier +
-# subnet group so the restore lands in the DR region's network.
+# Clean the metadata AWS Backup returns before feeding it to start-restore-job.
+# Drop fields that belong to the SOURCE region (eu-west-1) and don't exist in the
+# DR region, so RDS uses DR-region defaults + our DR subnet group instead:
+#   - DBSnapshotIdentifier : rejected (the snapshot comes from --recovery-point-arn)
+#   - AvailabilityZone     : eu-west-1a doesn't exist in eu-west-2
+#   - VpcSecurityGroupIds  : source-VPC SG IDs, invalid in the DR VPC
+#   - DBParameterGroupName : fincorp-db-params only exists in eu-west-1
+#   - OptionGroupName      : source-region option group
+#   - InformationalOnly:* / aws:backup:* : read-only/internal, not valid inputs
+# Then override identifier + subnet group (+ port) for the DR landing.
 NEW_META=$(echo "$META" | jq \
   --arg id "$NEW_DB_ID" \
   --arg sg "$DB_SUBNET_GROUP" \
-  'del(.DBSnapshotIdentifier) + {"DBInstanceIdentifier": $id, "DBSubnetGroupName": $sg}')
+  '(del(.DBSnapshotIdentifier, .AvailabilityZone, .VpcSecurityGroupIds, .DBParameterGroupName, .OptionGroupName, .DBName)
+    | with_entries(select((.key | startswith("InformationalOnly:")) or (.key | startswith("aws:backup:")) | not)))
+   + {"DBInstanceIdentifier": $id, "DBSubnetGroupName": $sg, "Port": "5432"}')
 
 # 3) Kick off the restore.
 log "Starting restore job..."
