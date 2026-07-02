@@ -19,7 +19,7 @@ INCLUDE_INGRESS="${INCLUDE_INGRESS:-1}"
 # LB controller install is a one-time, helm-based cluster setup. Off by default
 # so CI (which has no helm and shouldn't re-install it every deploy) can apply the
 # ingress without it. Run once locally with --ensure-lb-controller.
-ENSURE_LB_CONTROLLER="${ENSURE_LB_CONTROLLER:-0}"
+ENSURE_LB_CONTROLLER="${ENSURE_LB_CONTROLLER:-1}"
 
 usage() {
   cat <<'EOF'

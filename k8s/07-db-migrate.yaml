@@ -1,0 +1,106 @@
+# One-time DB schema migration — RUN MANUALLY (not applied by the pipeline).
+#
+# RDS does not auto-run db/init/init.sql the way local docker-compose does, so
+# this Job applies the schema from inside the cluster (RDS is private, only
+# reachable from the VPC). The SQL is idempotent (CREATE TABLE IF NOT EXISTS +
+# conditional seed), so re-running is safe.
+#
+# Run it:
+#   kubectl delete job db-migrate -n fincorp --ignore-not-found
+#   kubectl apply -f k8s/07-db-migrate.yaml
+#   kubectl -n fincorp wait --for=condition=complete job/db-migrate --timeout=120s
+#   kubectl -n fincorp logs job/db-migrate
+#
+# The ConfigMap below is kept in sync with db/init/init.sql (single source of
+# truth for local compose). If you change one, change the other.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: db-init-sql
+  namespace: fincorp
+data:
+  init.sql: |
+    BEGIN;
+
+    CREATE TABLE IF NOT EXISTS products (
+        id          SERIAL PRIMARY KEY,
+        name        TEXT NOT NULL,
+        price       NUMERIC(10, 2) NOT NULL CHECK (price >= 0),
+        stock       INTEGER NOT NULL DEFAULT 0 CHECK (stock >= 0),
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS products_name_idx ON products (name);
+
+    INSERT INTO products (name, price, stock)
+    SELECT v.name, v.price, v.stock
+    FROM (
+        VALUES
+            ('Widget', 9.99, 100),
+            ('Sprocket', 14.50, 50),
+            ('Gizmo', 24.00, 25),
+            ('Cog', 4.75, 500),
+            ('Thingamajig', 49.99, 10)
+    ) AS v(name, price, stock)
+    WHERE NOT EXISTS (
+        SELECT 1 FROM products p WHERE p.name = v.name
+    );
+
+    COMMIT;
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-migrate
+  namespace: fincorp
+  labels:
+    app: db-migrate
+  annotations:
+    # This is a psql one-shot, not our app — keep the ADOT agent out of it.
+    instrumentation.opentelemetry.io/inject-python: "false"
+    instrumentation.opentelemetry.io/inject-nodejs: "false"
+    instrumentation.opentelemetry.io/inject-java: "false"
+    instrumentation.opentelemetry.io/inject-dotnet: "false"
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 600   # auto-clean 10 min after completion
+  template:
+    metadata:
+      labels:
+        app: db-migrate
+      annotations:
+        instrumentation.opentelemetry.io/inject-python: "false"
+        instrumentation.opentelemetry.io/inject-nodejs: "false"
+        instrumentation.opentelemetry.io/inject-java: "false"
+        instrumentation.opentelemetry.io/inject-dotnet: "false"
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: psql
+          image: postgres:16-alpine
+          # sslmode=require — the RDS parameter group sets rds.force_ssl=1.
+          command:
+            - sh
+            - -c
+            - 'psql "$POSTGRES_DSN?sslmode=require" -v ON_ERROR_STOP=1 -f /sql/init.sql'
+          env:
+            - name: POSTGRES_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: fincorp-db
+                  key: POSTGRES_DSN
+          volumeMounts:
+            - name: sql
+              mountPath: /sql
+              readOnly: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      volumes:
+        - name: sql
+          configMap:
+            name: db-init-sql

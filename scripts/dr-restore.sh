@@ -52,10 +52,13 @@ META=$(aws backup get-recovery-point-restore-metadata \
   --backup-vault-name "$DR_VAULT" --recovery-point-arn "$RP_ARN" \
   --region "$DR_REGION" --query RestoreMetadata --output json)
 
+# Drop DBSnapshotIdentifier: AWS Backup rejects it in restore metadata (the
+# source snapshot comes from --recovery-point-arn). Override the identifier +
+# subnet group so the restore lands in the DR region's network.
 NEW_META=$(echo "$META" | jq \
   --arg id "$NEW_DB_ID" \
   --arg sg "$DB_SUBNET_GROUP" \
-  '. + {"DBInstanceIdentifier": $id, "DBSubnetGroupName": $sg}')
+  'del(.DBSnapshotIdentifier) + {"DBInstanceIdentifier": $id, "DBSubnetGroupName": $sg}')
 
 # 3) Kick off the restore.
 log "Starting restore job..."

@@ -62,6 +62,19 @@ commit is a no-op (the build is skipped and apply finds nothing to change).
 > NOT pass `--ensure-lb-controller` (no Helm on the runner; the controller is a
 > one-time setup from step 3).
 
+## 5. Create the DB schema (one-time, manual)
+RDS doesn't auto-run `db/init/init.sql` like local compose does. Apply the schema
+once, from inside the cluster, with the manual migration Job (NOT run by the
+pipeline). It's idempotent, so re-running is safe:
+```bash
+kubectl delete job db-migrate -n fincorp --ignore-not-found
+kubectl apply -f k8s/07-db-migrate.yaml
+kubectl -n fincorp wait --for=condition=complete job/db-migrate --timeout=120s
+kubectl -n fincorp logs job/db-migrate
+```
+After this the `products` table exists and `/products` works. (Not needed after a
+DR restore — the restored instance already contains the schema and data.)
+
 ## 6. DR drill
 Follow the [DR runbook](05-dr-runbook.md).
 
