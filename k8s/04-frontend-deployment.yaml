@@ -25,6 +25,15 @@ spec:
     metadata:
       labels:
         app: frontend
+      annotations:
+        # CloudWatch Application Signals (amazon-cloudwatch-observability add-on).
+        # Keep ONLY the Node.js agent (this is a Node.js service); explicitly
+        # disable the other languages so the add-on's Auto-Monitor doesn't inject
+        # 3 useless init containers + a wall of Java/Node/.NET env vars.
+        instrumentation.opentelemetry.io/inject-python: "false"
+        instrumentation.opentelemetry.io/inject-nodejs: "true"
+        instrumentation.opentelemetry.io/inject-java: "false"
+        instrumentation.opentelemetry.io/inject-dotnet: "false"
     spec:
       serviceAccountName: frontend
       containers:

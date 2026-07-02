@@ -25,6 +25,16 @@ spec:
     metadata:
       labels:
         app: backend
+      annotations:
+        # CloudWatch Application Signals (amazon-cloudwatch-observability add-on).
+        # Keep ONLY the Python agent (this is a Python service); explicitly
+        # disable the other languages so the add-on's Auto-Monitor doesn't inject
+        # 3 useless init containers + a wall of Java/Node/.NET env vars.
+        # Paired with --workers 1 and a 1Gi limit so the agent has memory headroom.
+        instrumentation.opentelemetry.io/inject-python: "true"
+        instrumentation.opentelemetry.io/inject-nodejs: "false"
+        instrumentation.opentelemetry.io/inject-java: "false"
+        instrumentation.opentelemetry.io/inject-dotnet: "false"
     spec:
       serviceAccountName: backend
       containers:
@@ -51,10 +61,10 @@ spec:
           resources:
             requests:
               cpu: 100m
-              memory: 256Mi
+              memory: 512Mi   # headroom for the ADOT Application Signals agent
             limits:
               cpu: 500m
-              memory: 512Mi
+              memory: 1Gi     # was 512Mi — too tight with instrumentation → OOM
           livenessProbe:
             httpGet:
               path: /healthz

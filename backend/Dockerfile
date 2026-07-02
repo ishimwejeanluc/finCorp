@@ -71,5 +71,8 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD curl --fail --silent http://localhost:8000/healthz || exit 1
 
+# Single worker: on K8s we scale with replicas, not in-pod workers. Each worker
+# pays the full ADOT Application Signals instrumentation memory cost, so two
+# workers in a tight cgroup risk the kernel OOM-killing a worker (restart loop).
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", \
-     "--workers", "2", "--access-log", "--no-server-header"]
+     "--workers", "1", "--access-log", "--no-server-header"]
