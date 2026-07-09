@@ -1,14 +1,24 @@
 name: dr-restore
 
-# Cross-region Disaster Recovery — manual failover.
+# Cross-region Disaster Recovery — FULL region rebuild (manual failover).
 #
-# Restores the database in the DR region (eu-west-2) from the latest AWS Backup
-# cross-region recovery point. Run this AFTER simulating the region failure
-# (deleting the primary instance). This is workflow_dispatch ONLY — restoring a
-# database is a deliberate, destructive action, never automatic on push.
+# Rebuilds the entire stack in the DR region (eu-west-2) and lands the database
+# next to it, so the recovered app and DB sit together and connect locally:
+#   1. terraform apply infra/live-dr   (VPC, EKS, Redis, RDS landing)
+#   2. restore the DB from the latest AWS Backup recovery point INTO that VPC
+#   3. reset its password + attach the DR security group
+#   4. deploy the app onto the DR cluster, pointing at the local DB
 #
-# Requires the same OIDC role + repo Variables as build-and-push.yml, plus:
-#   BACKUP_ROLE_ARN  = terraform output backup_role_arn
+# Run this AFTER simulating the region failure (destroying the primary stack).
+# workflow_dispatch ONLY — a full rebuild is deliberate, never automatic on push.
+#
+# Requires repo Variables:
+#   AWS_GHA_ROLE_ARN            OIDC CI role (least-privilege deploy/restore role)
+#   BACKUP_ROLE_ARN            AWS Backup service role (persistent output backup_role_arn)
+#   AWS_DR_PROVISIONER_ROLE_ARN (optional) role with rights to `terraform apply`
+#                              the DR stack (EKS/EC2/IAM/ElastiCache). Falls back to
+#                              AWS_GHA_ROLE_ARN — which is scoped for deploy, NOT for
+#                              provisioning, so set this (or run the rebuild locally).
 
 on:
   workflow_dispatch:
@@ -17,12 +27,16 @@ on:
         description: "Identifier for the restored instance"
         required: true
         default: "fincorp-db-restored"
+      rebuild_infra:
+        description: "terraform apply the DR stack (off if it is already built)"
+        type: boolean
+        default: true
       replace:
-        description: "If the restored instance already exists, delete it and restore fresh (otherwise it's a no-op when already present)"
+        description: "If the restored instance already exists, delete it and restore fresh"
         type: boolean
         default: false
-      repoint_app:
-        description: "Re-point the EKS app at the restored DB (off if the primary region/cluster is truly down)"
+      deploy_app:
+        description: "Deploy the app onto the DR cluster after the restore"
         type: boolean
         default: true
 
@@ -32,73 +46,36 @@ permissions:
 
 jobs:
   restore:
-    name: restore-in-dr-region
+    name: rebuild-and-restore-in-dr-region
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Set up Helm (for the LB controller install)
+        uses: azure/setup-helm@v4
+
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_GHA_ROLE_ARN }}
+          # Provisioning the DR stack needs broad rights; use the dedicated
+          # provisioner role if set, else fall back to the CI role.
+          role-to-assume: ${{ vars.AWS_DR_PROVISIONER_ROLE_ARN || vars.AWS_GHA_ROLE_ARN }}
           aws-region: eu-west-2
 
-      - name: Restore from cross-region backup
+      - name: Full DR recovery (rebuild infra + restore DB + deploy app)
         env:
           PROJECT: fincorp
           DR_REGION: eu-west-2
           NEW_DB_ID: ${{ github.event.inputs.new_db_identifier }}
+          REBUILD_INFRA: ${{ github.event.inputs.rebuild_infra }}
           REPLACE: ${{ github.event.inputs.replace }}
+          DEPLOY_APP: ${{ github.event.inputs.deploy_app }}
           BACKUP_ROLE_ARN: ${{ vars.BACKUP_ROLE_ARN }}
         run: |
-          chmod +x scripts/dr-restore.sh
+          chmod +x scripts/dr-restore.sh scripts/deploy-eks-k8s.sh
           ./scripts/dr-restore.sh
-
-      - name: Re-point the app at the restored database
-        if: ${{ inputs.repoint_app }}
-        env:
-          PRIMARY_REGION: eu-west-1
-          DR_REGION: eu-west-2
-          CLUSTER: fincorp
-          NS: fincorp
-          NEW_DB_ID: ${{ github.event.inputs.new_db_identifier }}
-          CRED_SECRET_ID: fincorp/rds/credentials
-        run: |
-          set -euo pipefail
-
-          # 1) Endpoint of the restored instance (DR region).
-          NEW_HOST=$(aws rds describe-db-instances --db-instance-identifier "$NEW_DB_ID" \
-            --region "$DR_REGION" --query 'DBInstances[0].Endpoint.Address' --output text)
-          echo "Restored endpoint: $NEW_HOST"
-
-          # 2) Master credentials are preserved by the restore — reuse them.
-          #    URL-encode so special chars in the password don't break the DSN.
-          NEW_DSN="$(aws secretsmanager get-secret-value --secret-id "$CRED_SECRET_ID" \
-            --region "$PRIMARY_REGION" --query SecretString --output text \
-            | NEW_HOST="$NEW_HOST" python3 -c '
-          import json, os, sys
-          from urllib.parse import quote
-          d = json.load(sys.stdin)
-          user = quote(d["username"], safe="")
-          pw   = quote(d["password"], safe="")
-          host = os.environ["NEW_HOST"]
-          port = d.get("port", 5432)
-          db   = d.get("dbname", "fincorp")
-          print(f"postgresql://{user}:{pw}@{host}:{port}/{db}")')"
-          echo "::add-mask::$NEW_DSN"
-
-          # 3) Point kubectl at the cluster (still up in this simulation).
-          aws eks update-kubeconfig --name "$CLUSTER" --region "$PRIMARY_REGION"
-
-          # 4) Patch only the DSN; preserve the existing REDIS_URL.
-          REDIS_URL=$(kubectl -n "$NS" get secret fincorp-db \
-            -o jsonpath='{.data.REDIS_URL}' | base64 -d || true)
-          kubectl -n "$NS" create secret generic fincorp-db \
-            --from-literal=POSTGRES_DSN="$NEW_DSN" \
-            --from-literal=REDIS_URL="$REDIS_URL" \
-            --dry-run=client -o yaml | kubectl apply -f -
-
-          # 5) Restart the backend so it reconnects to the restored DB.
-          kubectl -n "$NS" rollout restart deployment/backend
-          kubectl -n "$NS" rollout status deployment/backend --timeout=180s
-          echo "::notice::App re-pointed to restored DB at ${NEW_HOST}"

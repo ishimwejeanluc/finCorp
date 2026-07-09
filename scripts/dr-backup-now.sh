@@ -10,7 +10,7 @@
 # copy isn't empty.
 #
 # Required:
-#   BACKUP_ROLE_ARN   AWS Backup service role (terraform output backup_role_arn)
+#   BACKUP_ROLE_ARN   AWS Backup service role (terraform -chdir=infra/live-persistent output -raw backup_role_arn)
 # Optional (defaults):
 #   PROJECT=fincorp  PRIMARY_REGION=eu-west-1  DR_REGION=eu-west-2
 #   DB_ID=${PROJECT}-db  PRIMARY_VAULT=${PROJECT}-backup-primary  DR_VAULT=${PROJECT}-backup-dr
@@ -23,7 +23,7 @@ DR_REGION="${DR_REGION:-eu-west-2}"
 DB_ID="${DB_ID:-${PROJECT}-db}"
 PRIMARY_VAULT="${PRIMARY_VAULT:-${PROJECT}-backup-primary}"
 DR_VAULT="${DR_VAULT:-${PROJECT}-backup-dr}"
-: "${BACKUP_ROLE_ARN:?Set BACKUP_ROLE_ARN (terraform output backup_role_arn)}"
+: "${BACKUP_ROLE_ARN:?Set BACKUP_ROLE_ARN (terraform -chdir=infra/live-persistent output -raw backup_role_arn)}"
 
 log() { printf '\033[1;35m[dr-backup]\033[0m %s\n' "$*"; }
 

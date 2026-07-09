@@ -1,19 +1,25 @@
 locals {
   name = "${var.project}-db"
+  # In "restore" mode only the plumbing (subnet group + SG) is created; the instance,
+  # its CMK, parameter group, generated password and credentials secret are skipped
+  # because scripts/dr-restore.sh lands the instance from a backup recovery point.
+  create = var.rds_mode == "create"
 }
 
-# ---------- Generated master password ----------
+# ---------- Generated master password (create mode only) ----------
 # Excludes characters that confuse DSN parsers (@ : / ?).
 resource "random_password" "master" {
+  count            = local.create ? 1 : 0
   length           = 32
   special          = true
   override_special = "!#%^*-_=+"
 }
 
-# ---------- Customer-managed KMS key ----------
+# ---------- Customer-managed KMS key (create mode only) ----------
 # A CMK (not the default aws/rds key) is REQUIRED for AWS Backup to copy the
 # encrypted recovery point to another region. This is the linchpin of the DR plan.
 resource "aws_kms_key" "db" {
+  count                   = local.create ? 1 : 0
   description             = "CMK for ${local.name} storage + snapshots (enables cross-region backup copy)"
   deletion_window_in_days = 7
   enable_key_rotation     = true
@@ -21,18 +27,21 @@ resource "aws_kms_key" "db" {
 }
 
 resource "aws_kms_alias" "db" {
+  count         = local.create ? 1 : 0
   name          = "alias/${local.name}"
-  target_key_id = aws_kms_key.db.key_id
+  target_key_id = aws_kms_key.db[0].key_id
 }
 
-# ---------- Subnet group ----------
+# ---------- Subnet group (always — the restore lands the instance here) ----------
 resource "aws_db_subnet_group" "this" {
   name       = "${local.name}-subnets"
   subnet_ids = var.private_subnet_ids
   tags       = { Name = "${local.name}-subnets" }
 }
 
-# ---------- Security group (no ingress; the live stack adds the rule from the EKS SG) ----------
+# ---------- Security group (always; the live stack adds ingress from the EKS cluster SG) ----------
+# In restore mode dr-restore.sh attaches this SG to the restored instance so the
+# rebuilt app connects locally, same-VPC.
 resource "aws_security_group" "this" {
   name        = "${local.name}-sg"
   description = "RDS Postgres - ingress added by the live stack"
@@ -48,8 +57,9 @@ resource "aws_security_group" "this" {
   tags = { Name = "${local.name}-sg" }
 }
 
-# ---------- Parameter group ----------
+# ---------- Parameter group (create mode only) ----------
 resource "aws_db_parameter_group" "this" {
+  count       = local.create ? 1 : 0
   name        = "${local.name}-params"
   family      = "postgres16"
   description = "Postgres 16 params for ${var.project}"
@@ -64,10 +74,11 @@ resource "aws_db_parameter_group" "this" {
   }
 }
 
-# ---------- RDS Postgres instance (the DR-protected database) ----------
+# ---------- RDS Postgres instance (create mode only, the DR-protected database) ----------
 # deletion_protection = false and skip_final_snapshot = true on purpose: the DR
-# simulation deletes this instance to mimic a region failure.
+# simulation destroys this instance (with the whole primary stack) to mimic a region failure.
 resource "aws_db_instance" "this" {
+  count          = local.create ? 1 : 0
   identifier     = local.name
   engine         = "postgres"
   engine_version = var.engine_version
@@ -77,16 +88,16 @@ resource "aws_db_instance" "this" {
   max_allocated_storage = var.max_allocated_storage
   storage_type          = "gp3"
   storage_encrypted     = true
-  kms_key_id            = aws_kms_key.db.arn
+  kms_key_id            = aws_kms_key.db[0].arn
 
   db_name  = var.db_name
   username = var.master_username
-  password = random_password.master.result
+  password = random_password.master[0].result
   port     = 5432
 
   db_subnet_group_name   = aws_db_subnet_group.this.name
   vpc_security_group_ids = [aws_security_group.this.id]
-  parameter_group_name   = aws_db_parameter_group.this.name
+  parameter_group_name   = aws_db_parameter_group.this[0].name
   multi_az               = var.multi_az
   publicly_accessible    = false
 
@@ -113,29 +124,34 @@ resource "aws_db_instance" "this" {
   }
 }
 
-# ---------- Secrets Manager ----------
+# ---------- Secrets Manager (create mode only) ----------
+# On failover the restored instance's password is reset by dr-restore.sh, which
+# writes a fresh ${project}/rds/credentials secret in the DR region — so this
+# primary-region secret is not needed for recovery.
 resource "aws_secretsmanager_secret" "credentials" {
+  count                   = local.create ? 1 : 0
   name                    = "${var.project}/rds/credentials"
   description             = "RDS Postgres credentials for ${var.project}"
   recovery_window_in_days = 0
 }
 
 resource "aws_secretsmanager_secret_version" "credentials" {
-  secret_id = aws_secretsmanager_secret.credentials.id
+  count     = local.create ? 1 : 0
+  secret_id = aws_secretsmanager_secret.credentials[0].id
   secret_string = jsonencode({
     username = var.master_username
-    password = random_password.master.result
+    password = random_password.master[0].result
     engine   = "postgres"
-    host     = aws_db_instance.this.address
-    port     = aws_db_instance.this.port
-    dbname   = aws_db_instance.this.db_name
+    host     = aws_db_instance.this[0].address
+    port     = aws_db_instance.this[0].port
+    dbname   = aws_db_instance.this[0].db_name
     dsn = format(
       "postgresql://%s:%s@%s:%d/%s",
       var.master_username,
-      random_password.master.result,
-      aws_db_instance.this.address,
-      aws_db_instance.this.port,
-      aws_db_instance.this.db_name,
+      random_password.master[0].result,
+      aws_db_instance.this[0].address,
+      aws_db_instance.this[0].port,
+      aws_db_instance.this[0].db_name,
     )
   })
 }

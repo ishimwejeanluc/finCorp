@@ -58,10 +58,13 @@ k8s/                       Kubernetes manifests (namespace: fincorp)
 scripts/dr-restore.sh      DR failover automation
 infra/
   bootstrap/               creates fincorp-tfstate bucket + lock table
-  live-fincorp/            the stack (providers, wiring, DR network)
+  live-persistent/         survives the DR drill: backups, ECR+replication, OIDC, CodeArtifact
+  live-primary/            live app+data stack, eu-west-1 (module.stack, rds_mode=create)
+  live-dr/                 same stack rebuilt on failover, eu-west-2 (rds_mode=restore)
   modules/
+    stack/                 the reusable regional stack (network + eks/* + rds + elasticache + LB)
     network/ ecr/ elasticache/ rds/ eks/*
-    codeartifact/ github-oidc/ backup/   ← new for this lab
+    codeartifact/ github-oidc/ backup/
 docs/                      this documentation set
 ```
 

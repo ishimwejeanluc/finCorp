@@ -11,6 +11,10 @@ BACKEND_REPO="${BACKEND_REPO:-fincorp/backend}"
 FRONTEND_REPO="${FRONTEND_REPO:-fincorp/frontend}"
 IMAGE_TAG="${IMAGE_TAG:-}"
 ACCOUNT_ID="${ACCOUNT_ID:-}"
+# Registry host the images are pulled from. Defaults to the account's ECR in the
+# target region — so a DR deploy (AWS_REGION=eu-west-2) pulls the replicated image
+# from the eu-west-2 registry, not the hardcoded eu-west-1 host in the manifest.
+ECR_REGISTRY="${ECR_REGISTRY:-}"
 
 RDS_SECRET_ID="${RDS_SECRET_ID:-fincorp/rds/credentials}"
 REDIS_SECRET_ID="${REDIS_SECRET_ID:-fincorp/redis/credentials}"
@@ -148,9 +152,12 @@ render_and_apply() {
   echo "Backend image tag:  $btag"
   echo "Frontend image tag: $ftag"
 
-  sed "s#${BACKEND_REPO}:placeholder#${BACKEND_REPO}:${btag}#" \
+  # Rewrite the FULL image reference (registry host + repo + tag) so the deploy is
+  # region-portable: the manifest hardcodes the eu-west-1 host, but ECR_REGISTRY
+  # points at whatever region we're deploying into (eu-west-2 on DR failover).
+  sed -E "s#image: .*/${BACKEND_REPO}:placeholder#image: ${ECR_REGISTRY}/${BACKEND_REPO}:${btag}#" \
     "$k8s_dir/02-backend-deployment.yaml" > "$tmp/02-backend-deployment.yaml"
-  sed "s#${FRONTEND_REPO}:placeholder#${FRONTEND_REPO}:${ftag}#" \
+  sed -E "s#image: .*/${FRONTEND_REPO}:placeholder#image: ${ECR_REGISTRY}/${FRONTEND_REPO}:${ftag}#" \
     "$k8s_dir/04-frontend-deployment.yaml" > "$tmp/04-frontend-deployment.yaml"
 
   kubectl apply -f "$tmp/02-backend-deployment.yaml"
@@ -289,8 +296,12 @@ main() {
   if [[ -z "$ACCOUNT_ID" ]]; then
     ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
   fi
+  if [[ -z "$ECR_REGISTRY" ]]; then
+    ECR_REGISTRY="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+  fi
 
   echo "Region:       $AWS_REGION"
+  echo "ECR registry: $ECR_REGISTRY"
   echo "Cluster:      $CLUSTER_NAME"
   echo "Namespace:    $NAMESPACE"
   echo "K8s dir:      $k8s_dir"

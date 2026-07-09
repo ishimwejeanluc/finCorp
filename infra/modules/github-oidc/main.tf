@@ -118,11 +118,13 @@ data "aws_iam_policy_document" "ci" {
   }
 
   # --- EKS: read cluster info for `update-kubeconfig` + deploy ---
+  # Wildcard region so the same CI role can drive both the primary (eu-west-1) and
+  # the rebuilt DR (eu-west-2) clusters, which share the project name.
   statement {
     sid       = "EksDescribe"
     effect    = "Allow"
     actions   = ["eks:DescribeCluster"]
-    resources = ["arn:${data.aws_partition.current.partition}:eks:${var.region}:${data.aws_caller_identity.current.account_id}:cluster/${var.cluster_name}"]
+    resources = ["arn:${data.aws_partition.current.partition}:eks:*:${data.aws_caller_identity.current.account_id}:cluster/${var.project}"]
   }
 
   # --- AWS Backup: drive the DR restore workflow ---
@@ -151,14 +153,34 @@ data "aws_iam_policy_document" "ci" {
   }
 
   # Idempotent DR restore: delete a prior restored instance so the drill can
-  # re-run (REPLACE / unhealthy-state recovery). Scoped to the RESTORED name
+  # re-run (REPLACE / unhealthy-state recovery), and reset its master password +
+  # attach the DR security group after the restore. Scoped to the RESTORED name
   # pattern only — the primary '${var.project}-db' is deliberately NOT matched,
-  # so CI can never delete the production database.
+  # so CI can never delete or modify the production database.
   statement {
-    sid       = "RdsDeleteRestoredOnly"
-    effect    = "Allow"
-    actions   = ["rds:DeleteDBInstance"]
+    sid    = "RdsManageRestoredOnly"
+    effect = "Allow"
+    actions = [
+      "rds:DeleteDBInstance",
+      "rds:ModifyDBInstance",
+    ]
     resources = ["arn:${data.aws_partition.current.partition}:rds:*:${data.aws_caller_identity.current.account_id}:db:${var.project}-db-restored*"]
+  }
+
+  # Write the fresh DR-region credentials secret after the password reset.
+  statement {
+    sid    = "WriteAppSecrets"
+    effect = "Allow"
+    actions = [
+      "secretsmanager:CreateSecret",
+      "secretsmanager:PutSecretValue",
+      "secretsmanager:UpdateSecret",
+      "secretsmanager:TagResource",
+      "secretsmanager:DescribeSecret",
+    ]
+    resources = [
+      "arn:${data.aws_partition.current.partition}:secretsmanager:*:${data.aws_caller_identity.current.account_id}:secret:${var.project}/rds/credentials-*",
+    ]
   }
 
   # Read the app credential secrets so the pipeline can build the K8s Secret

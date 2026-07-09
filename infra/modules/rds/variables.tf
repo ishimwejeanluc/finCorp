@@ -3,6 +3,21 @@ variable "project" {
   type        = string
 }
 
+variable "rds_mode" {
+  description = <<-EOT
+    "create"  - build a fresh CMK-encrypted Postgres instance + credentials secret (primary region).
+    "restore" - build ONLY the DB subnet group + security group (the restore landing). The instance
+                itself is landed by scripts/dr-restore.sh via AWS Backup start-restore-job, and its
+                master password is reset by that script, so no instance/KMS/secret is created here.
+  EOT
+  type        = string
+  default     = "create"
+  validation {
+    condition     = contains(["create", "restore"], var.rds_mode)
+    error_message = "rds_mode must be \"create\" or \"restore\"."
+  }
+}
+
 variable "vpc_id" {
   description = "VPC the database lives in."
   type        = string

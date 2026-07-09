@@ -49,14 +49,21 @@ No static AWS keys. Tags are the Git commit SHA; ECR repos are `IMMUTABLE`.
 backend/ frontend/        app + CodeArtifact-aware Dockerfiles
 k8s/                      manifests (namespace: fincorp)
 .github/workflows/        build-and-push.yml, dr-restore.yml
-scripts/dr-restore.sh     DR failover automation
-infra/live-fincorp/       the Terraform stack
+scripts/dr-*.sh           DR: backup-now, simulate-failure, restore (full rebuild)
+infra/live-persistent/    survives the drill: backups, ECR+replication, OIDC, CodeArtifact
+infra/live-primary/       the live app+data stack (eu-west-1) — module.stack, rds_mode=create
+infra/live-dr/            the same stack rebuilt on failover (eu-west-2) — rds_mode=restore
+infra/modules/stack/      the reusable regional stack (network + eks/* + rds + elasticache + LB)
 infra/modules/            network ecr elasticache rds eks/* codeartifact github-oidc backup
 ```
 
 ## Quick start
 See [docs/00-deploy.md](docs/00-deploy.md). TL;DR:
 ```bash
-cd infra/live-fincorp && terraform init && terraform apply
-# set GitHub repo Variables from terraform outputs, then push to main
+terraform -chdir=infra/live-persistent init && terraform -chdir=infra/live-persistent apply
+terraform -chdir=infra/live-primary    init && terraform -chdir=infra/live-primary    apply
+# set GitHub repo Variables from live-persistent outputs, then push to main
 ```
+
+Migrating from the old single `infra/live-fincorp` root? See [docs/07-migration.md](docs/07-migration.md).
+DR model + design: [docs/06-dr-rebuild-design.md](docs/06-dr-rebuild-design.md) · runbook: [docs/05-dr-runbook.md](docs/05-dr-runbook.md).

@@ -1,19 +1,26 @@
-# 4 — Disaster Recovery Setup (AWS Backup, cross-region)
+# 4 — Disaster Recovery Setup (AWS Backup + ECR replication, cross-region)
 
-Module: `infra/modules/backup` · Primary `eu-west-1` → DR `eu-west-2`
+Backup module: `infra/modules/backup`, in the **persistent layer**
+(`infra/live-persistent`) · Primary `eu-west-1` → DR `eu-west-2`
+
+> Layout: the DR-critical pieces below live in `infra/live-persistent` so they
+> survive the drill; the app/DB live in `infra/live-primary` (and are rebuilt in
+> `infra/live-dr` on failover). See [06-dr-rebuild-design.md](06-dr-rebuild-design.md)
+> and [07-migration.md](07-migration.md).
 
 ## What gets created
 
-| Resource | Region | Purpose |
+| Resource | Layer / Region | Purpose |
 |---|---|---|
-| KMS CMK (primary) | eu-west-1 | encrypts the primary vault |
-| KMS CMK (dr) | eu-west-2 | encrypts the DR vault |
-| Backup vault `fincorp-backup-primary` | eu-west-1 | holds daily recovery points |
-| Backup vault `fincorp-backup-dr` | eu-west-2 | receives cross-region copies |
-| Backup plan `fincorp-daily-dr` | eu-west-1 | daily rule + `copy_action` to DR vault |
-| Backup selection | — | matches resources tagged `Backup=fincorp` |
-| IAM role `fincorp-backup-role` | — | AWS Backup service role (backup + restore) |
-| DB subnet group `fincorp-dr-db-subnets` | eu-west-2 | restore target (in `infra/live-fincorp`) |
+| KMS CMK (primary) | persistent / eu-west-1 | encrypts the primary vault |
+| KMS CMK (dr) | persistent / eu-west-2 | encrypts the DR vault |
+| Backup vault `fincorp-backup-primary` | persistent / eu-west-1 | holds daily recovery points |
+| Backup vault `fincorp-backup-dr` | persistent / eu-west-2 | receives cross-region copies |
+| Backup plan `fincorp-daily-dr` | persistent / eu-west-1 | daily rule + `copy_action` to DR vault |
+| Backup selection | persistent | matches resources tagged `Backup=fincorp` (the primary DB) |
+| IAM role `fincorp-backup-role` | persistent | AWS Backup service role (backup + restore) |
+| ECR replication (eu-west-1 → eu-west-2) | persistent | mirrors `fincorp/*` images to DR so the rebuilt stack can pull locally |
+| DB subnet group `fincorp-db-subnets` | dr / eu-west-2 | restore landing (built by `module.stack` in `infra/live-dr`, `rds_mode=restore`) |
 
 ## Why a customer-managed KMS key matters
 
@@ -43,11 +50,15 @@ an on-demand backup so a recovery point exists in the DR vault before you simula
 failure:
 
 ```bash
-# 1. On-demand backup of the primary DB into the primary vault
+# Easiest: the helper does backup + cross-region copy end to end.
+export BACKUP_ROLE_ARN="$(terraform -chdir=infra/live-persistent output -raw backup_role_arn)"
+./scripts/dr-backup-now.sh
+
+# Or manually — 1. on-demand backup of the primary DB into the primary vault
 aws backup start-backup-job \
   --backup-vault-name fincorp-backup-primary \
-  --resource-arn "$(terraform output -raw rds_arn)" \
-  --iam-role-arn "$(terraform output -raw backup_role_arn)" \
+  --resource-arn "$(terraform -chdir=infra/live-primary output -raw rds_arn)" \
+  --iam-role-arn "$BACKUP_ROLE_ARN" \
   --region eu-west-1
 
 # 2. Wait for it to COMPLETE, then confirm it copied to the DR vault

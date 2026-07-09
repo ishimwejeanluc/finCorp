@@ -113,4 +113,7 @@ purge_vault "$DR_VAULT" "$DR_REGION"
 
 echo
 log "Pre-destroy cleanup complete."
-log "Now run:  cd infra/live-fincorp && terraform destroy"
+log "Now run (in order):"
+log "  terraform -chdir=infra/live-dr        destroy   # if ever applied"
+log "  terraform -chdir=infra/live-primary   destroy"
+log "  terraform -chdir=infra/live-persistent destroy"

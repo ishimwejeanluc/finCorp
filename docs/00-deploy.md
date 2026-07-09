@@ -9,22 +9,31 @@ Order of operations to stand up the whole FinCorp lab.
   cd infra/bootstrap && terraform init && terraform apply
   # creates fincorp-tfstate-<account-id> (S3) + fincorp-tfstate-lock (DynamoDB)
   ```
-  Then set the bucket name in `infra/live-fincorp/main.tf`'s backend block (or pass
-  `-backend-config`).
+  The new roots' backend blocks already point at `fincorp-tfstate-<account-id>`
+  (distinct state keys per root). Adjust the bucket name if yours differs.
 
 ## 1. Provision infrastructure
+The stack is split into three roots (see [06-dr-rebuild-design.md](06-dr-rebuild-design.md)).
+Apply the persistent layer first (its CI role is consumed by the regional stacks):
 ```bash
-cd infra/live-fincorp
-terraform init
-terraform apply        # creates VPC, EKS, ECR, RDS, CodeArtifact, OIDC, AWS Backup, DR network
+# a) persistent: backups, ECR + cross-region replication, OIDC, CodeArtifact
+terraform -chdir=infra/live-persistent init
+terraform -chdir=infra/live-persistent apply
+
+# b) primary regional stack: VPC, EKS, RDS, Redis (eu-west-1)
+terraform -chdir=infra/live-primary init
+terraform -chdir=infra/live-primary apply    # DR stack (live-dr) is applied only at failover
 ```
 Capture outputs:
 ```bash
-terraform output gha_ci_role_arn      # → GitHub var AWS_GHA_ROLE_ARN
-terraform output backup_role_arn      # → GitHub var BACKUP_ROLE_ARN
-terraform output ecr_repository_urls
-terraform output -raw kubeconfig_command | bash   # point kubectl at the cluster
+terraform -chdir=infra/live-persistent output -raw gha_ci_role_arn   # → GitHub var AWS_GHA_ROLE_ARN
+terraform -chdir=infra/live-persistent output -raw backup_role_arn   # → GitHub var BACKUP_ROLE_ARN
+terraform -chdir=infra/live-persistent output ecr_repository_urls
+terraform -chdir=infra/live-primary    output -raw kubeconfig_command | bash   # point kubectl at the cluster
 ```
+
+> Already have the old single `infra/live-fincorp` root deployed? Follow
+> [07-migration.md](07-migration.md) instead of applying fresh.
 
 ## 2. Configure GitHub repo Variables
 Settings → Secrets and variables → Actions → **Variables** (see
@@ -80,6 +89,8 @@ Follow the [DR runbook](05-dr-runbook.md).
 
 ## Teardown
 ```bash
-# delete any restored DR instance first (see runbook), then:
-cd infra/live-fincorp && terraform destroy
+# delete any restored DR instance first (see runbook), then tear down in order:
+terraform -chdir=infra/live-dr        destroy   # if the DR stack was ever applied
+terraform -chdir=infra/live-primary   destroy
+terraform -chdir=infra/live-persistent destroy  # empty the ECR repos first (see 07-migration.md)
 ```

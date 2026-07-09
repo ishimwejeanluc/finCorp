@@ -1,19 +1,34 @@
 #!/usr/bin/env bash
 #
-# dr-restore.sh — Restore the FinCorp database in the DR region (eu-west-2)
-# from the latest AWS Backup cross-region recovery point.
+# dr-restore.sh — FULL cross-region recovery in the DR region (eu-west-2).
 #
-# Use during a simulated/real primary-region failure. Designed to complete well
-# within the 30-minute RTO for a small instance.
+# After a simulated full-region failure (scripts/dr-simulate-failure.sh destroyed
+# the whole primary stack), this rebuilds everything in eu-west-2 and lands the
+# database next to it, so the app and DB sit together and connect locally:
+#
+#   1. terraform apply  infra/live-dr   -> VPC, EKS, Redis, RDS landing (subnet
+#                                          group + SG), LB controller IRSA.
+#   2. start-restore-job                -> restore the DB from the latest DR
+#                                          recovery point INTO that VPC's subnet group.
+#   3. modify-db-instance               -> attach the DR RDS security group (local
+#                                          access from the cluster) + reset the
+#                                          master password to a fresh one.
+#   4. write ${PROJECT}/rds/credentials in eu-west-2 with the new creds.
+#   5. deploy-eks-k8s.sh                -> deploy the app onto the DR cluster,
+#                                          pointing at the LOCAL restored DB.
 #
 # Required:
-#   BACKUP_ROLE_ARN   AWS Backup service role (terraform output backup_role_arn)
+#   BACKUP_ROLE_ARN   AWS Backup service role (terraform -chdir=infra/live-persistent output -raw backup_role_arn)
 # Optional (sensible defaults):
 #   PROJECT           default: fincorp
 #   DR_REGION         default: eu-west-2
 #   DR_VAULT          default: ${PROJECT}-backup-dr
 #   NEW_DB_ID         default: ${PROJECT}-db-restored
-#   DB_SUBNET_GROUP   default: ${PROJECT}-dr-db-subnets
+#   DR_DIR            default: infra/live-dr
+#   REBUILD_INFRA     default: 1  (0 to skip terraform apply — infra already up)
+#   DEPLOY_APP        default: 1  (0 to skip the kubectl deploy)
+#   REPLACE           default: 0  (1 forces a fresh restore even if the DB exists)
+#   NAMESPACE         default: ${PROJECT}
 #
 set -euo pipefail
 
@@ -21,22 +36,42 @@ PROJECT="${PROJECT:-fincorp}"
 DR_REGION="${DR_REGION:-eu-west-2}"
 DR_VAULT="${DR_VAULT:-${PROJECT}-backup-dr}"
 NEW_DB_ID="${NEW_DB_ID:-${PROJECT}-db-restored}"
-DB_SUBNET_GROUP="${DB_SUBNET_GROUP:-${PROJECT}-dr-db-subnets}"
-# REPLACE=1 forces a fresh restore even if the target already exists (delete first).
+NAMESPACE="${NAMESPACE:-${PROJECT}}"
 REPLACE="${REPLACE:-0}"
-: "${BACKUP_ROLE_ARN:?Set BACKUP_ROLE_ARN (terraform output backup_role_arn)}"
+REBUILD_INFRA="${REBUILD_INFRA:-1}"
+DEPLOY_APP="${DEPLOY_APP:-1}"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DR_DIR="${DR_DIR:-${REPO_ROOT}/infra/live-dr}"
+CRED_SECRET_ID="${CRED_SECRET_ID:-${PROJECT}/rds/credentials}"
+REDIS_SECRET_ID="${REDIS_SECRET_ID:-${PROJECT}/redis/credentials}"
+: "${BACKUP_ROLE_ARN:?Set BACKUP_ROLE_ARN (terraform -chdir=infra/live-persistent output -raw backup_role_arn)}"
 
-log() { printf '\033[1;36m[dr-restore]\033[0m %s\n' "$*"; }
+log()  { printf '\033[1;36m[dr-restore]\033[0m %s\n' "$*"; }
+is_true() { [[ "${1:-}" == "1" || "${1:-}" == "true" || "${1:-}" == "TRUE" || "${1:-}" == "yes" ]]; }
+
+START_EPOCH=$(date +%s)
+
+# ---------- 1. Rebuild the DR stack (VPC, EKS, Redis, DB landing) ----------
+if is_true "$REBUILD_INFRA"; then
+  log "Rebuilding the DR stack in $DR_REGION (terraform apply $DR_DIR)..."
+  terraform -chdir="$DR_DIR" init -input=false >/dev/null
+  terraform -chdir="$DR_DIR" apply -auto-approve
+else
+  log "REBUILD_INFRA=0 — assuming the DR stack is already applied."
+fi
+
+# Read the landing details Terraform just produced.
+DB_SUBNET_GROUP="$(terraform -chdir="$DR_DIR" output -raw rds_db_subnet_group_name)"
+RDS_SG_ID="$(terraform -chdir="$DR_DIR" output -raw rds_security_group_id)"
+CLUSTER="$(terraform -chdir="$DR_DIR" output -raw cluster_name)"
+log "DB subnet group: $DB_SUBNET_GROUP"
+log "RDS SG:          $RDS_SG_ID"
+log "DR cluster:      $CLUSTER"
 
 report_endpoint() {
-  local ep
-  ep=$(aws rds describe-db-instances --db-instance-identifier "$NEW_DB_ID" \
-    --region "$DR_REGION" --query 'DBInstances[0].Endpoint.Address' --output text 2>/dev/null || echo "pending")
-  log "Recovered instance: $NEW_DB_ID"
-  log "Endpoint:           $ep (port 5432)"
+  aws rds describe-db-instances --db-instance-identifier "$NEW_DB_ID" \
+    --region "$DR_REGION" --query 'DBInstances[0].Endpoint.Address' --output text 2>/dev/null || echo "pending"
 }
-
-is_true() { [[ "${1:-}" == "1" || "${1:-}" == "true" || "${1:-}" == "TRUE" || "${1:-}" == "yes" ]]; }
 
 delete_target() {
   log "Deleting existing '$NEW_DB_ID'..."
@@ -45,14 +80,12 @@ delete_target() {
   aws rds wait db-instance-deleted --db-instance-identifier "$NEW_DB_ID" --region "$DR_REGION" || true
 }
 
-START_EPOCH=$(date +%s)
-log "Region:        $DR_REGION"
-log "Vault:         $DR_VAULT"
-log "New instance:  $NEW_DB_ID"
-
-# 0) Idempotency: converge safely if the target instance already exists.
+# ---------- 2. Restore the DB into the DR VPC ----------
+# Idempotency: converge safely if the target already exists.
 CUR=$(aws rds describe-db-instances --db-instance-identifier "$NEW_DB_ID" \
   --region "$DR_REGION" --query 'DBInstances[0].DBInstanceStatus' --output text 2>/dev/null || true)
+
+RESTORE_NEEDED=1
 if [[ -n "$CUR" && "$CUR" != "None" ]]; then
   log "Target '$NEW_DB_ID' already exists (status: $CUR)."
   if is_true "$REPLACE"; then
@@ -61,15 +94,11 @@ if [[ -n "$CUR" && "$CUR" != "None" ]]; then
   else
     case "$CUR" in
       available)
-        log "Already restored — nothing to do (idempotent). Set REPLACE=1 to force a fresh restore."
-        report_endpoint
-        exit 0 ;;
+        log "Already restored — skipping the restore step (idempotent)." ; RESTORE_NEEDED=0 ;;
       creating|modifying|backing-up|configuring-*|starting|maintenance|renaming|upgrading|storage-optimization|resetting-master-credentials)
         log "A restore is already in progress — waiting for it to become available..."
         aws rds wait db-instance-available --db-instance-identifier "$NEW_DB_ID" --region "$DR_REGION"
-        log "Now available (idempotent)."
-        report_endpoint
-        exit 0 ;;
+        RESTORE_NEEDED=0 ;;
       *)
         log "Existing instance is in unhealthy state '$CUR' — recreating it."
         delete_target ;;
@@ -77,74 +106,116 @@ if [[ -n "$CUR" && "$CUR" != "None" ]]; then
   fi
 fi
 
-# 1) Latest RDS recovery point in the DR vault (already copied cross-region).
-log "Finding latest RDS recovery point..."
-RP_ARN=$(aws backup list-recovery-points-by-backup-vault \
-  --backup-vault-name "$DR_VAULT" --region "$DR_REGION" \
-  --by-resource-type RDS \
-  --query 'sort_by(RecoveryPoints, &CreationDate)[-1].RecoveryPointArn' \
-  --output text)
+if [[ "$RESTORE_NEEDED" -eq 1 ]]; then
+  log "Finding latest RDS recovery point in $DR_VAULT..."
+  RP_ARN=$(aws backup list-recovery-points-by-backup-vault \
+    --backup-vault-name "$DR_VAULT" --region "$DR_REGION" --by-resource-type RDS \
+    --query 'sort_by(RecoveryPoints, &CreationDate)[-1].RecoveryPointArn' --output text)
+  if [[ -z "$RP_ARN" || "$RP_ARN" == "None" ]]; then
+    echo "ERROR: no RDS recovery point found in $DR_VAULT ($DR_REGION)." >&2
+    exit 1
+  fi
+  log "Recovery point: $RP_ARN"
 
-if [[ -z "$RP_ARN" || "$RP_ARN" == "None" ]]; then
-  echo "ERROR: no RDS recovery point found in $DR_VAULT ($DR_REGION)." >&2
-  echo "       Has the daily backup + cross-region copy run yet?" >&2
-  exit 1
+  log "Reading restore metadata..."
+  META=$(aws backup get-recovery-point-restore-metadata \
+    --backup-vault-name "$DR_VAULT" --recovery-point-arn "$RP_ARN" \
+    --region "$DR_REGION" --query RestoreMetadata --output json)
+
+  # Drop SOURCE-region fields that don't exist in the DR region, then override the
+  # identifier + subnet group. The security group is attached AFTER the restore
+  # (step 3), so drop VpcSecurityGroupIds here too.
+  NEW_META=$(echo "$META" | jq \
+    --arg id "$NEW_DB_ID" \
+    --arg sg "$DB_SUBNET_GROUP" \
+    '(del(.DBSnapshotIdentifier, .AvailabilityZone, .VpcSecurityGroupIds, .DBParameterGroupName, .OptionGroupName, .DBName)
+      | with_entries(select((.key | startswith("InformationalOnly:")) or (.key | startswith("aws:backup:")) | not)))
+     + {"DBInstanceIdentifier": $id, "DBSubnetGroupName": $sg, "Port": "5432"}')
+
+  log "Starting restore job..."
+  JOB_ID=$(aws backup start-restore-job \
+    --recovery-point-arn "$RP_ARN" \
+    --iam-role-arn "$BACKUP_ROLE_ARN" \
+    --resource-type RDS \
+    --metadata "$NEW_META" \
+    --region "$DR_REGION" \
+    --query RestoreJobId --output text)
+  log "Restore job: $JOB_ID"
+
+  while true; do
+    STATUS=$(aws backup describe-restore-job --restore-job-id "$JOB_ID" \
+      --region "$DR_REGION" --query Status --output text)
+    log "  restore status=$STATUS  elapsed=$(( $(date +%s) - START_EPOCH ))s"
+    case "$STATUS" in
+      COMPLETED) break ;;
+      ABORTED|FAILED)
+        MSG=$(aws backup describe-restore-job --restore-job-id "$JOB_ID" \
+          --region "$DR_REGION" --query StatusMessage --output text)
+        echo "ERROR: restore $STATUS — $MSG" >&2; exit 1 ;;
+    esac
+    sleep 20
+  done
+  aws rds wait db-instance-available --db-instance-identifier "$NEW_DB_ID" --region "$DR_REGION"
 fi
-log "Recovery point: $RP_ARN"
 
-# 2) Restore metadata from the recovery point; override identifier + subnet group.
-log "Reading restore metadata..."
-META=$(aws backup get-recovery-point-restore-metadata \
-  --backup-vault-name "$DR_VAULT" --recovery-point-arn "$RP_ARN" \
-  --region "$DR_REGION" --query RestoreMetadata --output json)
+# ---------- 3. Attach the DR security group + reset the master password ----------
+# The restored instance preserves the OLD master password, which may be gone with
+# the primary region. Reset it to a fresh value we control, and attach the DR SG
+# (which already trusts the DR EKS cluster SG) so the app connects locally.
+log "Attaching DR security group + resetting master password..."
+NEW_PW="$(LC_ALL=C tr -dc 'A-Za-z0-9!#%^*_=+-' </dev/urandom | head -c 24)"
+aws rds modify-db-instance --db-instance-identifier "$NEW_DB_ID" \
+  --vpc-security-group-ids "$RDS_SG_ID" \
+  --master-user-password "$NEW_PW" \
+  --apply-immediately --region "$DR_REGION" >/dev/null
+sleep 10
+aws rds wait db-instance-available --db-instance-identifier "$NEW_DB_ID" --region "$DR_REGION"
 
-# Clean the metadata AWS Backup returns before feeding it to start-restore-job.
-# Drop fields that belong to the SOURCE region (eu-west-1) and don't exist in the
-# DR region, so RDS uses DR-region defaults + our DR subnet group instead:
-#   - DBSnapshotIdentifier : rejected (the snapshot comes from --recovery-point-arn)
-#   - AvailabilityZone     : eu-west-1a doesn't exist in eu-west-2
-#   - VpcSecurityGroupIds  : source-VPC SG IDs, invalid in the DR VPC
-#   - DBParameterGroupName : fincorp-db-params only exists in eu-west-1
-#   - OptionGroupName      : source-region option group
-#   - InformationalOnly:* / aws:backup:* : read-only/internal, not valid inputs
-# Then override identifier + subnet group (+ port) for the DR landing.
-NEW_META=$(echo "$META" | jq \
-  --arg id "$NEW_DB_ID" \
-  --arg sg "$DB_SUBNET_GROUP" \
-  '(del(.DBSnapshotIdentifier, .AvailabilityZone, .VpcSecurityGroupIds, .DBParameterGroupName, .OptionGroupName, .DBName)
-    | with_entries(select((.key | startswith("InformationalOnly:")) or (.key | startswith("aws:backup:")) | not)))
-   + {"DBInstanceIdentifier": $id, "DBSubnetGroupName": $sg, "Port": "5432"}')
+# ---------- 4. Write the fresh DR-region credentials secret ----------
+read -r DB_USER DB_NAME DB_HOST DB_PORT <<EOF
+$(aws rds describe-db-instances --db-instance-identifier "$NEW_DB_ID" --region "$DR_REGION" \
+  --query 'DBInstances[0].[MasterUsername,DBName,Endpoint.Address,Endpoint.Port]' --output text)
+EOF
+[[ -z "$DB_NAME" || "$DB_NAME" == "None" ]] && DB_NAME="$PROJECT"
+log "Restored endpoint: $DB_HOST:$DB_PORT  (user=$DB_USER db=$DB_NAME)"
 
-# 3) Kick off the restore.
-log "Starting restore job..."
-JOB_ID=$(aws backup start-restore-job \
-  --recovery-point-arn "$RP_ARN" \
-  --iam-role-arn "$BACKUP_ROLE_ARN" \
-  --resource-type RDS \
-  --metadata "$NEW_META" \
-  --region "$DR_REGION" \
-  --query RestoreJobId --output text)
-log "Restore job: $JOB_ID"
+SECRET_JSON=$(DB_USER="$DB_USER" DB_PW="$NEW_PW" DB_HOST="$DB_HOST" DB_PORT="$DB_PORT" DB_NAME="$DB_NAME" \
+  python3 -c '
+import json, os
+from urllib.parse import quote
+u = os.environ["DB_USER"]; pw = os.environ["DB_PW"]
+host = os.environ["DB_HOST"]; port = int(os.environ["DB_PORT"]); db = os.environ["DB_NAME"]
+qu = quote(u, safe=""); qpw = quote(pw, safe="")
+dsn = "postgresql://{}:{}@{}:{}/{}".format(qu, qpw, host, port, db)
+print(json.dumps({
+  "username": u, "password": pw, "engine": "postgres",
+  "host": host, "port": port, "dbname": db, "dsn": dsn,
+}))')
 
-# 4) Poll to completion.
-while true; do
-  STATUS=$(aws backup describe-restore-job --restore-job-id "$JOB_ID" \
-    --region "$DR_REGION" --query Status --output text)
-  ELAPSED=$(( $(date +%s) - START_EPOCH ))
-  log "  status=$STATUS  elapsed=${ELAPSED}s"
-  case "$STATUS" in
-    COMPLETED) break ;;
-    ABORTED|FAILED)
-      MSG=$(aws backup describe-restore-job --restore-job-id "$JOB_ID" \
-        --region "$DR_REGION" --query StatusMessage --output text)
-      echo "ERROR: restore $STATUS — $MSG" >&2
-      exit 1 ;;
-  esac
-  sleep 20
-done
+if aws secretsmanager describe-secret --secret-id "$CRED_SECRET_ID" --region "$DR_REGION" >/dev/null 2>&1; then
+  aws secretsmanager put-secret-value --secret-id "$CRED_SECRET_ID" \
+    --secret-string "$SECRET_JSON" --region "$DR_REGION" >/dev/null
+else
+  aws secretsmanager create-secret --name "$CRED_SECRET_ID" \
+    --secret-string "$SECRET_JSON" --region "$DR_REGION" >/dev/null
+fi
+log "Wrote credentials secret '$CRED_SECRET_ID' in $DR_REGION."
 
-# 5) Report the recovered endpoint.
+# ---------- 5. Deploy the app onto the DR cluster (points at the LOCAL DB) ----------
+if is_true "$DEPLOY_APP"; then
+  log "Deploying the app onto the DR cluster..."
+  AWS_REGION="$DR_REGION" \
+  CLUSTER_NAME="$CLUSTER" \
+  NAMESPACE="$NAMESPACE" \
+  RDS_SECRET_ID="$CRED_SECRET_ID" \
+  REDIS_SECRET_ID="$REDIS_SECRET_ID" \
+  ENSURE_LB_CONTROLLER="${ENSURE_LB_CONTROLLER:-1}" \
+    "$REPO_ROOT/scripts/deploy-eks-k8s.sh"
+else
+  log "DEPLOY_APP=0 — skipping the kubectl deploy."
+fi
+
 TOTAL=$(( $(date +%s) - START_EPOCH ))
-log "RESTORE COMPLETE in ${TOTAL}s (RTO target: 1800s)"
-report_endpoint
-log "Next: attach a security group / re-point the app, then validate row counts."
+log "RECOVERY COMPLETE in ${TOTAL}s."
+log "Restored DB: $NEW_DB_ID  ($(report_endpoint):5432)"
+log "The rebuilt app and restored DB are co-located in $DR_REGION — local, no cross-region reach."

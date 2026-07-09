@@ -4,8 +4,14 @@ variable "project" {
 }
 
 variable "protected_db_arn" {
-  description = "ARN of the RDS instance being protected. Informational / forces dependency ordering."
+  description = <<-EOT
+    ARN of the RDS instance being protected. Informational only — the backup
+    SELECTION matches by the 'Backup' tag, not by ARN, so this module has no hard
+    dependency on the DB. Left empty in the persistent layer (the DB lives in a
+    separate regional stack and is tagged for tag-based selection).
+  EOT
   type        = string
+  default     = ""
 }
 
 variable "backup_tag_value" {

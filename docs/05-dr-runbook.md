@@ -1,88 +1,80 @@
 # 5 — DR Runbook (Live Walkthrough)
 
-**Goal:** restore `fincorp-db` in **eu-west-2** within **30 minutes (RTO)** after a
-simulated `eu-west-1` failure.
+**Model:** full-region rebuild. On a simulated loss of **eu-west-1**, Terraform
+re-creates the identical stack in **eu-west-2** and the database is restored **into
+that same VPC**, so the rebuilt app and the restored DB sit together and connect
+locally — no cross-region reach, no peering.
 
-> The 30-minute clock is **restore time**, not copy time. The cross-region copy
-> runs daily, *ahead* of any incident — so a recovery point already exists in DR
-> when failure strikes. See [04-dr-setup.md](04-dr-setup.md) to pre-stage one.
+> The cross-region backup copy + ECR image replication run **ahead** of any
+> incident, so a recovery point and the images already exist in eu-west-2 when
+> failure strikes. See [04-dr-setup.md](04-dr-setup.md) to pre-stage them.
 
 ---
 
 ## 0. Pre-checks (before the demo)
 
 ```bash
-cd infra/live-fincorp
-terraform output backup_role_arn          # used by the restore
-terraform output backup_vault_dr           # fincorp-backup-dr
-# Confirm a recovery point exists in the DR region:
+# Backup service role (persistent layer) + confirm a DR recovery point exists.
+terraform -chdir=infra/live-persistent output -raw backup_role_arn
 aws backup list-recovery-points-by-backup-vault \
   --backup-vault-name fincorp-backup-dr \
   --by-resource-type RDS --region eu-west-2 \
   --query 'RecoveryPoints[].{arn:RecoveryPointArn,created:CreationDate,status:Status}'
+
+# Confirm images are replicated to the DR region.
+aws ecr describe-images --repository-name fincorp/backend --region eu-west-2 \
+  --query 'imageDetails[].imageTags' --output text
 ```
-✅ At least one `COMPLETED` recovery point in `fincorp-backup-dr`.
+✅ At least one `COMPLETED` recovery point in `fincorp-backup-dr` **and** images
+present in the eu-west-2 ECR.
 
-## 1. Simulate the region failure  ⏱️ start the clock
+## 1. Simulate the FULL region failure  ⏱️ start the clock
 
-Delete the primary database (mimics losing eu-west-1). `deletion_protection` is
-off and `skip_final_snapshot` is on, so this is a clean delete:
+Destroy the **entire** primary stack (app + EKS + Redis + RDS + VPC). The
+persistent layer (backups, ECR, OIDC) and the state bucket are separate and are
+left intact.
 
 ```bash
-aws rds delete-db-instance \
-  --db-instance-identifier fincorp-db \
-  --skip-final-snapshot --delete-automated-backups \
-  --region eu-west-1
+export BACKUP_ROLE_ARN="$(terraform -chdir=infra/live-persistent output -raw backup_role_arn)"
+./scripts/dr-simulate-failure.sh          # asks you to type the project name
+# add --yes to skip the prompt in automation
 ```
-Show in the console that `fincorp-db` is `deleting` / gone.
+The script refuses to run unless a recovery point exists in eu-west-2, then runs
+`terraform -chdir=infra/live-primary destroy`.
 
 ## 2. Recover in the DR region
 
-**Option A — one click (recommended for the walkthrough):**
-GitHub → Actions → **dr-restore** → *Run workflow* → keep
-`new_db_identifier = fincorp-db-restored`.
+**Option A — one click:** GitHub → Actions → **dr-restore** → *Run workflow*
+(keep `rebuild_infra = true`, `deploy_app = true`).
 
 **Option B — local CLI (same logic):**
 ```bash
-export BACKUP_ROLE_ARN="$(cd infra/live-fincorp && terraform output -raw backup_role_arn)"
+export BACKUP_ROLE_ARN="$(terraform -chdir=infra/live-persistent output -raw backup_role_arn)"
 ./scripts/dr-restore.sh
 ```
 
-The script/workflow:
-1. finds the latest RDS recovery point in `fincorp-backup-dr`,
-2. reads its restore metadata, retargets it to `fincorp-db-restored` + the DR DB subnet group,
-3. runs `start-restore-job`, polls to `COMPLETED`, prints the endpoint and elapsed time.
+`dr-restore.sh` runs the whole recovery in order:
+1. `terraform apply infra/live-dr` — rebuilds VPC, EKS, Redis, and the RDS landing
+   (subnet group + SG) in eu-west-2,
+2. restores the DB from the latest DR recovery point **into that VPC's subnet group**,
+3. attaches the DR RDS security group + resets the master password to a fresh value,
+4. writes `fincorp/rds/credentials` in eu-west-2,
+5. deploys the app onto the DR cluster (`deploy-eks-k8s.sh`), pulling the
+   **replicated** images from the eu-west-2 ECR and pointing at the **local** DB.
 
 ## 3. Validate  ⏱️ stop the clock
 
 ```bash
-aws rds describe-db-instances \
-  --db-instance-identifier fincorp-db-restored \
-  --region eu-west-2 \
-  --query 'DBInstances[0].{status:DBInstanceStatus,endpoint:Endpoint.Address}'
-```
-Then connect (Query Editor / psql via a bastion) and confirm the data is intact:
-```sql
-SELECT count(*) FROM <your_table>;
-```
-✅ Record the elapsed time from step 1 → here. For a `db.t3.micro` this is
-typically **10–20 minutes**, inside the 30-minute RTO.
+# DB is up and local to the DR VPC:
+aws rds describe-db-instances --db-instance-identifier fincorp-db-restored \
+  --region eu-west-2 --query 'DBInstances[0].{status:DBInstanceStatus,endpoint:Endpoint.Address}'
 
-## 4. Re-point the app (automatic)
-When run via the **dr-restore** workflow with `repoint_app = true` (the default),
-the cutover is automatic: after the restore it reads the restored endpoint, reuses
-the preserved master credentials from Secrets Manager, rewrites only the
-`POSTGRES_DSN` in the `fincorp-db` Kubernetes Secret (keeping `REDIS_URL`), and
-restarts the backend so it reconnects to the recovered database.
-
-Untick `repoint_app` if the primary region/cluster is genuinely down (then you'd
-fail traffic over per your wider DR plan instead). The equivalent manual steps:
-```bash
-NEW_HOST=$(aws rds describe-db-instances --db-instance-identifier fincorp-db-restored \
-  --region eu-west-2 --query 'DBInstances[0].Endpoint.Address' --output text)
-# rebuild the DSN with NEW_HOST, update the fincorp-db Secret, then:
-kubectl -n fincorp rollout restart deployment/backend
+# App is running on the DR cluster:
+aws eks update-kubeconfig --name fincorp --region eu-west-2
+kubectl -n fincorp get pods,svc,ingress
+kubectl -n fincorp get ingress          # ALB hostname to hit
 ```
+✅ Record elapsed time from step 1 → here.
 
 ---
 
@@ -91,11 +83,21 @@ kubectl -n fincorp rollout restart deployment/backend
 | Metric | Value | Driven by |
 |---|---|---|
 | **RPO** | ≤ 24 h | daily backup schedule (tighten the cron for a smaller RPO) |
-| **RTO** | < 30 min | restore time of a small instance from an already-copied recovery point |
+| **RTO** | ~25–40 min | from-zero rebuild: EKS control plane (~10–15 min) + nodes/addons + LB controller + app rollout, in parallel with the DB restore |
 
-## Cleanup after the demo
+> This is a **cold-standby (rebuild)** posture — a larger RTO than the previous
+> DB-only failover, in exchange for the whole stack living in one region with no
+> cross-region dependency. To shrink RTO, keep a minimal always-on node group in
+> eu-west-2 (warm standby) at standing cost.
+
+## 4. Fail back / clean up after the demo
 ```bash
+# Tear the DR stack down + remove the restored DB:
+terraform -chdir=infra/live-dr destroy
 aws rds delete-db-instance --db-instance-identifier fincorp-db-restored \
   --skip-final-snapshot --region eu-west-2
-# Recreate the primary with: terraform apply (in infra/live-fincorp)
+
+# Rebuild the primary:
+terraform -chdir=infra/live-primary apply
+# then re-deploy the app + take a fresh backup (scripts/dr-backup-now.sh).
 ```
