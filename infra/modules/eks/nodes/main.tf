@@ -36,13 +36,6 @@ resource "aws_iam_role_policy_attachment" "ecr_read" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
 }
 
-# Lets the CloudWatch agent / Fluent Bit (installed by the cloudwatch-observability
-# addon) push container logs and metrics to CloudWatch.
-resource "aws_iam_role_policy_attachment" "cloudwatch_agent" {
-  role       = aws_iam_role.node.name
-  policy_arn = "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy"
-}
-
 # The managed node group itself.
 resource "aws_eks_node_group" "this" {
   cluster_name    = var.cluster_name
@@ -73,7 +66,6 @@ resource "aws_eks_node_group" "this" {
     aws_iam_role_policy_attachment.worker,
     aws_iam_role_policy_attachment.cni,
     aws_iam_role_policy_attachment.ecr_read,
-    aws_iam_role_policy_attachment.cloudwatch_agent,
   ]
 
   lifecycle {

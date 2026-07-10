@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # dr-simulate-failure.sh — Simulate a FULL primary-region failure by destroying
-# the entire primary stack (app + EKS + Redis + RDS + VPC) in eu-west-1.
+# the entire primary stack (app + EKS + RDS + VPC) in eu-west-1.
 #
 # This is the "region failure" step of the DR drill. It runs `terraform destroy`
 # against infra/live-primary ONLY — the persistent layer (backup vaults + the DR
@@ -71,7 +71,7 @@ log "Primary EKS cluster '$PROJECT' in $PRIMARY_REGION: $CLUSTER_STATUS"
 if [[ "$ASSUME_YES" -ne 1 ]]; then
   echo
   echo "⚠️  This runs 'terraform destroy' on the WHOLE primary stack in $PRIMARY_REGION:"
-  echo "     EKS cluster + nodes, the app, ElastiCache, RDS ($PROJECT-db), the VPC."
+  echo "     EKS cluster + nodes, the app, RDS ($PROJECT-db), the VPC."
   echo "    The persistent layer (backups, ECR, OIDC) and state bucket are NOT touched."
   read -r -p "Type the project name to confirm: " REPLY
   if [[ "$REPLY" != "$PROJECT" ]]; then
@@ -80,7 +80,23 @@ if [[ "$ASSUME_YES" -ne 1 ]]; then
   fi
 fi
 
-# ---------- 4. Destroy = simulate the region failure (RTO clock starts) ----------
+# ---------- 4. Pre-destroy cleanup: remove the K8s ALB so destroy won't stall ----------
+# The Ingress/LoadBalancer Services create an ALB out-of-band (via the AWS Load
+# Balancer Controller). Terraform doesn't manage it, so on destroy its ENIs +
+# public IPs remain and block subnet/IGW deletion (DependencyViolation / "mapped
+# public address(es)"). Reuse teardown-eks-k8s.sh to remove it cleanly first.
+TEARDOWN_SCRIPT="$(dirname "${BASH_SOURCE[0]}")/teardown-eks-k8s.sh"
+if [[ "$CLUSTER_STATUS" == "ACTIVE" && -x "$TEARDOWN_SCRIPT" ]]; then
+  log "Removing K8s app + Ingress/ALB before destroy (frees ENIs/public IPs)..."
+  ALB_CLEANUP_WAIT_SECONDS=90 "$TEARDOWN_SCRIPT" \
+    --region "$PRIMARY_REGION" --cluster "$PROJECT" --namespace "$PROJECT" \
+    --include-ingress --delete-namespace \
+    || log "  (teardown-eks-k8s.sh reported errors — continuing to destroy)"
+else
+  log "Cluster not ACTIVE (or teardown script missing) — skipping K8s ALB cleanup."
+fi
+
+# ---------- 5. Destroy = simulate the region failure (RTO clock starts) ----------
 START_EPOCH=$(date +%s)
 log "RTO CLOCK START: $(date '+%Y-%m-%d %H:%M:%S %Z')"
 log "Destroying the primary stack in $PRIMARY_DIR ..."

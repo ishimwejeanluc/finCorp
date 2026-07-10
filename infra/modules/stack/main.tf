@@ -1,6 +1,6 @@
 # Regional application + data stack: VPC, EKS (cluster/nodes/addons/oidc), RDS,
-# ElastiCache, the AWS Load Balancer Controller IRSA, and the data-tier ingress
-# rules. Region-agnostic — the same code stands the stack up in eu-west-1
+# the AWS Load Balancer Controller IRSA, and the data-tier ingress rules.
+# Region-agnostic — the same code stands the stack up in eu-west-1
 # (primary, rds_mode="create") or eu-west-2 (DR, rds_mode="restore").
 
 terraform {
@@ -30,14 +30,6 @@ module "rds" {
 
   project            = var.project
   rds_mode           = var.rds_mode
-  vpc_id             = module.network.vpc_id
-  private_subnet_ids = module.network.private_subnet_ids
-}
-
-module "elasticache" {
-  source = "../elasticache"
-
-  project            = var.project
   vpc_id             = module.network.vpc_id
   private_subnet_ids = module.network.private_subnet_ids
 }
@@ -105,16 +97,6 @@ resource "aws_security_group_rule" "rds_from_cluster" {
   to_port                  = 5432
   protocol                 = "tcp"
   description              = "Postgres from EKS cluster SG"
-}
-
-resource "aws_security_group_rule" "redis_from_cluster" {
-  type                     = "ingress"
-  security_group_id        = module.elasticache.security_group_id
-  source_security_group_id = module.eks_cluster.cluster_security_group_id
-  from_port                = 6379
-  to_port                  = 6379
-  protocol                 = "tcp"
-  description              = "Redis from EKS cluster SG"
 }
 
 # ---------- AWS Load Balancer Controller IRSA + policy ----------

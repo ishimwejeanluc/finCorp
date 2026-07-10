@@ -6,7 +6,7 @@
 # the whole primary stack), this rebuilds everything in eu-west-2 and lands the
 # database next to it, so the app and DB sit together and connect locally:
 #
-#   1. terraform apply  infra/live-dr   -> VPC, EKS, Redis, RDS landing (subnet
+#   1. terraform apply  infra/live-dr   -> VPC, EKS, RDS landing (subnet
 #                                          group + SG), LB controller IRSA.
 #   2. start-restore-job                -> restore the DB from the latest DR
 #                                          recovery point INTO that VPC's subnet group.
@@ -43,7 +43,6 @@ DEPLOY_APP="${DEPLOY_APP:-1}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DR_DIR="${DR_DIR:-${REPO_ROOT}/infra/live-dr}"
 CRED_SECRET_ID="${CRED_SECRET_ID:-${PROJECT}/rds/credentials}"
-REDIS_SECRET_ID="${REDIS_SECRET_ID:-${PROJECT}/redis/credentials}"
 : "${BACKUP_ROLE_ARN:?Set BACKUP_ROLE_ARN (terraform -chdir=infra/live-persistent output -raw backup_role_arn)}"
 
 log()  { printf '\033[1;36m[dr-restore]\033[0m %s\n' "$*"; }
@@ -51,7 +50,7 @@ is_true() { [[ "${1:-}" == "1" || "${1:-}" == "true" || "${1:-}" == "TRUE" || "$
 
 START_EPOCH=$(date +%s)
 
-# ---------- 1. Rebuild the DR stack (VPC, EKS, Redis, DB landing) ----------
+# ---------- 1. Rebuild the DR stack (VPC, EKS, DB landing) ----------
 if is_true "$REBUILD_INFRA"; then
   log "Rebuilding the DR stack in $DR_REGION (terraform apply $DR_DIR)..."
   terraform -chdir="$DR_DIR" init -input=false >/dev/null
@@ -208,7 +207,6 @@ if is_true "$DEPLOY_APP"; then
   CLUSTER_NAME="$CLUSTER" \
   NAMESPACE="$NAMESPACE" \
   RDS_SECRET_ID="$CRED_SECRET_ID" \
-  REDIS_SECRET_ID="$REDIS_SECRET_ID" \
   ENSURE_LB_CONTROLLER="${ENSURE_LB_CONTROLLER:-1}" \
     "$REPO_ROOT/scripts/deploy-eks-k8s.sh"
 else

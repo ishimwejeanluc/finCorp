@@ -17,7 +17,6 @@ ACCOUNT_ID="${ACCOUNT_ID:-}"
 ECR_REGISTRY="${ECR_REGISTRY:-}"
 
 RDS_SECRET_ID="${RDS_SECRET_ID:-fincorp/rds/credentials}"
-REDIS_SECRET_ID="${REDIS_SECRET_ID:-fincorp/redis/credentials}"
 SKIP_SECRET="${SKIP_SECRET:-0}"
 INCLUDE_INGRESS="${INCLUDE_INGRESS:-1}"
 # LB controller install is a one-time, helm-based cluster setup. Off by default
@@ -41,7 +40,6 @@ Options:
                                 pushed to ECR.
   --account-id <id>             AWS account ID for image URI (default: auto-detect)
   --rds-secret-id <id>          Secrets Manager ID for Postgres creds
-  --redis-secret-id <id>        Secrets Manager ID for Redis creds
   --skip-secret                 Skip creating/updating the fincorp-db Secret
   --include-ingress             Apply k8s/06-ingress.yaml (default: on)
   --no-ingress                  Do not apply the ingress
@@ -50,7 +48,7 @@ Options:
 
 Environment variable equivalents:
   AWS_REGION, CLUSTER_NAME, NAMESPACE, IMAGE_TAG, ACCOUNT_ID, RDS_SECRET_ID,
-  REDIS_SECRET_ID, SKIP_SECRET=1, INCLUDE_INGRESS=1, ENSURE_LB_CONTROLLER=1
+  SKIP_SECRET=1, INCLUDE_INGRESS=1, ENSURE_LB_CONTROLLER=1
 
 Examples:
   scripts/deploy-eks-k8s.sh --image-tag "$GIT_SHA"          # used by the pipeline
@@ -78,7 +76,7 @@ bool_true() {
 create_or_update_db_secret() {
   local namespace="$1"
 
-  # Build the DSN/URL in-script and URL-encode credentials so special chars
+  # Build the DSN in-script and URL-encode credentials so special chars
   # in the auto-generated password (#, !, <, >, $, etc.) don't break parsing.
   local pg_dsn
   pg_dsn="$(aws secretsmanager get-secret-value \
@@ -97,24 +95,8 @@ db   = d.get("dbname", "fincorp")
 print(f"postgresql://{user}:{pw}@{host}:{port}/{db}")
 ')"
 
-  local redis_url
-  redis_url="$(aws secretsmanager get-secret-value \
-    --secret-id "$REDIS_SECRET_ID" \
-    --region "$AWS_REGION" \
-    --query SecretString \
-    --output text | python3 -c '
-import json, sys
-from urllib.parse import quote
-d = json.load(sys.stdin)
-token = quote(d["auth_token"], safe="")
-host  = d["host"]
-port  = d.get("port", 6379)
-print(f"rediss://default:{token}@{host}:{port}/0")
-')"
-
   kubectl -n "$namespace" create secret generic fincorp-db \
     --from-literal=POSTGRES_DSN="$pg_dsn" \
-    --from-literal=REDIS_URL="$redis_url" \
     --dry-run=client -o yaml | kubectl apply -f -
 }
 
@@ -164,6 +146,7 @@ render_and_apply() {
   kubectl apply -f "$tmp/03-backend-service.yaml"
   kubectl apply -f "$tmp/04-frontend-deployment.yaml"
   kubectl apply -f "$tmp/05-frontend-service.yaml"
+  kubectl apply -f "$tmp/07-db-ingress.yaml"
 
   if bool_true "$INCLUDE_INGRESS"; then
     kubectl apply -f "$tmp/06-ingress.yaml"
@@ -242,10 +225,6 @@ parse_args() {
         ;;
       --rds-secret-id)
         RDS_SECRET_ID="$2"
-        shift 2
-        ;;
-      --redis-secret-id)
-        REDIS_SECRET_ID="$2"
         shift 2
         ;;
       --skip-secret)

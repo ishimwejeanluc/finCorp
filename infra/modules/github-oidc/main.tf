@@ -183,7 +183,7 @@ data "aws_iam_policy_document" "ci" {
     ]
   }
 
-  # Read the app credential secrets so the pipeline can build the K8s Secret
+  # Read the app credential secret so the pipeline can build the K8s Secret
   # (deploy) and rebuild the DSN on failover (DR re-point).
   statement {
     sid     = "ReadAppSecrets"
@@ -191,7 +191,6 @@ data "aws_iam_policy_document" "ci" {
     actions = ["secretsmanager:GetSecretValue"]
     resources = [
       "arn:${data.aws_partition.current.partition}:secretsmanager:*:${data.aws_caller_identity.current.account_id}:secret:${var.project}/rds/credentials-*",
-      "arn:${data.aws_partition.current.partition}:secretsmanager:*:${data.aws_caller_identity.current.account_id}:secret:${var.project}/redis/credentials-*",
     ]
   }
 }

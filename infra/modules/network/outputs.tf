@@ -23,11 +23,6 @@ output "nat_gateway_ids" {
   value       = [aws_nat_gateway.this.id]
 }
 
-output "vpc_endpoints_security_group_id" {
-  description = "SG that fronts the interface VPC endpoints."
-  value       = aws_security_group.endpoints.id
-}
-
 output "availability_zones" {
   description = "AZs the subnets are spread across."
   value       = local.azs

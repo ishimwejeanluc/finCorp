@@ -31,7 +31,7 @@ variable "enable_public_endpoint" {
 }
 
 variable "enabled_log_types" {
-  description = "EKS control-plane log types to ship to CloudWatch."
+  description = "EKS control-plane log types to ship to CloudWatch. Empty = disabled (no CloudWatch Logs cost) — the lean lab default. Set e.g. [\"audit\"] if you need it."
   type        = list(string)
-  default     = ["api", "audit", "authenticator"]
+  default     = []
 }

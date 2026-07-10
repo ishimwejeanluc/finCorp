@@ -4,7 +4,7 @@ name: dr-restore
 #
 # Rebuilds the entire stack in the DR region (eu-west-2) and lands the database
 # next to it, so the recovered app and DB sit together and connect locally:
-#   1. terraform apply infra/live-dr   (VPC, EKS, Redis, RDS landing)
+#   1. terraform apply infra/live-dr   (VPC, EKS, RDS landing)
 #   2. restore the DB from the latest AWS Backup recovery point INTO that VPC
 #   3. reset its password + attach the DR security group
 #   4. deploy the app onto the DR cluster, pointing at the local DB
@@ -16,7 +16,7 @@ name: dr-restore
 #   AWS_GHA_ROLE_ARN            OIDC CI role (least-privilege deploy/restore role)
 #   BACKUP_ROLE_ARN            AWS Backup service role (persistent output backup_role_arn)
 #   AWS_DR_PROVISIONER_ROLE_ARN (optional) role with rights to `terraform apply`
-#                              the DR stack (EKS/EC2/IAM/ElastiCache). Falls back to
+#                              the DR stack (EKS/EC2/IAM/VPC). Falls back to
 #                              AWS_GHA_ROLE_ARN — which is scoped for deploy, NOT for
 #                              provisioning, so set this (or run the rebuild locally).
 

@@ -1,4 +1,4 @@
-# Local-only stack. In AWS, postgres -> RDS, redis -> ElastiCache.
+# Local-only stack. In AWS, postgres -> RDS.
 # This compose file exists to verify the frontend <-> backend <-> data wiring
 # before we pay for any AWS infra.
 
@@ -23,19 +23,6 @@ services:
     networks:
       - fincorp
 
-  redis:
-    image: redis:7-alpine
-    command: ["redis-server", "--save", "", "--appendonly", "no"]
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-    networks:
-      - fincorp
-
   backend:
     build:
       context: ./backend
@@ -43,13 +30,10 @@ services:
     image: fincorp/backend:local
     environment:
       POSTGRES_DSN: postgresql://fincorp:fincorp_local_pw@postgres:5432/fincorp
-      REDIS_URL: redis://redis:6379/0
     ports:
       - "8000:8000"
     depends_on:
       postgres:
-        condition: service_healthy
-      redis:
         condition: service_healthy
     networks:
       - fincorp

@@ -36,25 +36,7 @@ resource "aws_eks_addon" "coredns" {
   depends_on = [aws_eks_addon.vpc_cni]
 }
 
-# Pre-create the four Container Insights log groups with retention. The addon
-# below would auto-create them with "Never expire", which is the expensive default.
-resource "aws_cloudwatch_log_group" "container_insights" {
-  for_each          = toset(["application", "dataplane", "host", "performance"])
-  name              = "/aws/containerinsights/${var.cluster_name}/${each.key}"
-  retention_in_days = var.log_retention_days
-}
-
-# amazon-cloudwatch-observability: installs the CloudWatch agent + Fluent Bit
-# DaemonSets that ship container stdout/stderr and node metrics to CloudWatch.
-# Relies on the CloudWatchAgentServerPolicy attached to the node role.
-resource "aws_eks_addon" "cloudwatch_observability" {
-  cluster_name                = var.cluster_name
-  addon_name                  = "amazon-cloudwatch-observability"
-  resolve_conflicts_on_create = "OVERWRITE"
-  resolve_conflicts_on_update = "OVERWRITE"
-
-  depends_on = [
-    var.node_group_arn,
-    aws_cloudwatch_log_group.container_insights,
-  ]
-}
+# NOTE: the amazon-cloudwatch-observability addon (CloudWatch agent + Fluent Bit +
+# Container Insights log groups + Application Signals) was removed to keep the lab
+# lean and speed up apply/destroy. Only the three core addons above are installed;
+# container stdout is still viewable via `kubectl logs`.

@@ -55,12 +55,6 @@ metadata:
   namespace: fincorp
   labels:
     app: db-migrate
-  annotations:
-    # This is a psql one-shot, not our app — keep the ADOT agent out of it.
-    instrumentation.opentelemetry.io/inject-python: "false"
-    instrumentation.opentelemetry.io/inject-nodejs: "false"
-    instrumentation.opentelemetry.io/inject-java: "false"
-    instrumentation.opentelemetry.io/inject-dotnet: "false"
 spec:
   backoffLimit: 3
   ttlSecondsAfterFinished: 600   # auto-clean 10 min after completion
@@ -68,11 +62,6 @@ spec:
     metadata:
       labels:
         app: db-migrate
-      annotations:
-        instrumentation.opentelemetry.io/inject-python: "false"
-        instrumentation.opentelemetry.io/inject-nodejs: "false"
-        instrumentation.opentelemetry.io/inject-java: "false"
-        instrumentation.opentelemetry.io/inject-dotnet: "false"
     spec:
       restartPolicy: Never
       containers:

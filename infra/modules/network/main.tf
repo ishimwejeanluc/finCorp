@@ -109,57 +109,16 @@ resource "aws_route_table_association" "private" {
 }
 
 
-resource "aws_security_group" "endpoints" {
-  name        = "${local.name}-vpce-sg"
-  description = "Allow 443 from VPC CIDR to interface VPC endpoints"
-  vpc_id      = aws_vpc.this.id
-
-  ingress {
-    description = "HTTPS from VPC"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = [var.vpc_cidr]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = { Name = "${local.name}-vpce-sg" }
-}
-
-
+# S3 gateway endpoint only — it's free, has no ENIs, and speeds ECR layer pulls
+# (ECR stores image layers in S3). The interface endpoints (ecr.api / ecr.dkr /
+# logs / secretsmanager) were removed: each put an ENI in every private subnet
+# (8 ENIs total) that was slow to provision AND a common cause of slow/stuck
+# subnet+VPC deletion. They were redundant with the NAT gateway — private nodes
+# reach ECR / Secrets Manager over NAT instead, with no functional change.
 resource "aws_vpc_endpoint" "s3" {
   vpc_id            = aws_vpc.this.id
   service_name      = "com.amazonaws.${data.aws_region.current.name}.s3"
   vpc_endpoint_type = "Gateway"
   route_table_ids   = [aws_route_table.private.id]
   tags              = { Name = "${local.name}-vpce-s3" }
-}
-
-
-locals {
-  interface_endpoints = {
-    ecr_api        = "ecr.api"
-    ecr_dkr        = "ecr.dkr"
-    logs           = "logs"
-    secretsmanager = "secretsmanager"
-  }
-}
-
-resource "aws_vpc_endpoint" "interface" {
-  for_each = local.interface_endpoints
-
-  vpc_id              = aws_vpc.this.id
-  service_name        = "com.amazonaws.${data.aws_region.current.name}.${each.value}"
-  vpc_endpoint_type   = "Interface"
-  subnet_ids          = aws_subnet.private[*].id
-  security_group_ids  = [aws_security_group.endpoints.id]
-  private_dns_enabled = true
-
-  tags = { Name = "${local.name}-vpce-${each.key}" }
 }

@@ -59,9 +59,3 @@ output "backup_tag_value" {
   description = "The 'Backup' tag value the AWS Backup selection matches on."
   value       = module.rds.backup_tag_value
 }
-
-# --- Data tier (Redis) ---
-output "redis_endpoint" {
-  value     = module.elasticache.primary_endpoint_address
-  sensitive = true
-}

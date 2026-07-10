@@ -22,11 +22,6 @@ output "rds_security_group_id" {
   value       = module.stack.rds_security_group_id
 }
 
-output "redis_endpoint" {
-  value     = module.stack.redis_endpoint
-  sensitive = true
-}
-
 output "lb_controller_role_arn" {
   description = "Annotate the aws-load-balancer-controller ServiceAccount with this ARN."
   value       = module.stack.lb_controller_role_arn
