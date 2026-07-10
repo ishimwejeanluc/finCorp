@@ -146,7 +146,7 @@ render_and_apply() {
   kubectl apply -f "$tmp/03-backend-service.yaml"
   kubectl apply -f "$tmp/04-frontend-deployment.yaml"
   kubectl apply -f "$tmp/05-frontend-service.yaml"
-  kubectl apply -f "$tmp/07-db-ingress.yaml"
+  kubectl apply -f "$tmp/07-db-migrate.yaml"
 
   if bool_true "$INCLUDE_INGRESS"; then
     kubectl apply -f "$tmp/06-ingress.yaml"
