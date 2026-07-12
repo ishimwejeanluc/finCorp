@@ -53,8 +53,22 @@ export BACKUP_ROLE_ARN="$(terraform -chdir=infra/live-persistent output -raw bac
 ./scripts/dr-restore.sh
 ```
 
+> **Run it so a closed terminal / laptop sleep can't interrupt it.** The restore
+> takes ~20-40 min and has long silent waits. `dr-restore.sh` auto-detaches with
+> `nohup` on most terminals, but some (e.g. **Warp**) force-kill the background
+> process when the command block ends. The reliable, terminal-agnostic way (works
+> in any terminal, macOS or Linux) is to run it inside `screen` (or `tmux`):
+> ```bash
+> screen -S dr
+> export BACKUP_ROLE_ARN="$(terraform -chdir=infra/live-persistent output -raw backup_role_arn)"
+> DR_FOREGROUND=1 caffeinate -i ./scripts/dr-restore.sh   # drop `caffeinate -i` on Linux/servers
+> #   detach: Ctrl-a then d   |   reattach: screen -r dr   |   follow: tail -f /tmp/dr-restore.log
+> ```
+> `DR_FOREGROUND=1` disables the built-in detach so `screen` alone manages it;
+> `caffeinate -i` (macOS) stops the laptop sleeping mid-run and dropping the network.
+
 `dr-restore.sh` runs the whole recovery in order:
-1. `terraform apply infra/live-dr` — rebuilds VPC, EKS, Redis, and the RDS landing
+1. `terraform apply infra/live-dr` — rebuilds the VPC, EKS, and the RDS landing
    (subnet group + SG) in eu-west-2,
 2. restores the DB from the latest DR recovery point **into that VPC's subnet group**,
 3. attaches the DR RDS security group + resets the master password to a fresh value,

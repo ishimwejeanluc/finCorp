@@ -17,6 +17,10 @@
 #
 set -euo pipefail
 
+# Ride out transient network/DNS blips instead of aborting — AWS CLI auto-retries.
+export AWS_RETRY_MODE="${AWS_RETRY_MODE:-standard}"
+export AWS_MAX_ATTEMPTS="${AWS_MAX_ATTEMPTS:-10}"
+
 PROJECT="${PROJECT:-fincorp}"
 PRIMARY_REGION="${PRIMARY_REGION:-eu-west-1}"
 DR_REGION="${DR_REGION:-eu-west-2}"

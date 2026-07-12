@@ -3,6 +3,10 @@
 # Does NOT build/push images - run scripts/push-ecr.sh first if needed.
 set -euo pipefail
 
+# Ride out transient network/DNS blips instead of aborting — AWS CLI auto-retries.
+export AWS_RETRY_MODE="${AWS_RETRY_MODE:-standard}"
+export AWS_MAX_ATTEMPTS="${AWS_MAX_ATTEMPTS:-10}"
+
 AWS_REGION="${AWS_REGION:-eu-west-1}"
 CLUSTER_NAME="${CLUSTER_NAME:-fincorp}"
 NAMESPACE="${NAMESPACE:-fincorp}"
@@ -22,7 +26,7 @@ INCLUDE_INGRESS="${INCLUDE_INGRESS:-1}"
 # LB controller install is a one-time, helm-based cluster setup. Off by default
 # so CI (which has no helm and shouldn't re-install it every deploy) can apply the
 # ingress without it. Run once locally with --ensure-lb-controller.
-ENSURE_LB_CONTROLLER="${ENSURE_LB_CONTROLLER:-1}"
+ENSURE_LB_CONTROLLER="${ENSURE_LB_CONTROLLER:-0issue when }"
 
 usage() {
   cat <<'EOF'

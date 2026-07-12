@@ -30,7 +30,20 @@
 #   REPLACE           default: 0  (1 forces a fresh restore even if the DB exists)
 #   NAMESPACE         default: ${PROJECT}
 #
+# When launched from an interactive terminal this re-execs itself DETACHED (nohup,
+# background) and logs to $DR_LOG (default /tmp/dr-restore.log) so a closed
+# terminal can't kill the long-running restore — follow it with `tail -f $DR_LOG`.
+#   DR_FOREGROUND=1   run inline instead of detaching (e.g. to watch it directly)
+#   DR_LOG            log file path when detached (default /tmp/dr-restore.log)
+# (Auto-skipped in CI / non-interactive runs so output is captured normally.)
+#
 set -euo pipefail
+
+# Ride out transient network/DNS blips on a flaky connection instead of aborting
+# the whole run — the AWS CLI retries transient failures (timeouts, dropped
+# connections, throttling) automatically. Override by exporting either var.
+export AWS_RETRY_MODE="${AWS_RETRY_MODE:-standard}"
+export AWS_MAX_ATTEMPTS="${AWS_MAX_ATTEMPTS:-10}"
 
 PROJECT="${PROJECT:-fincorp}"
 DR_REGION="${DR_REGION:-eu-west-2}"
@@ -47,6 +60,38 @@ CRED_SECRET_ID="${CRED_SECRET_ID:-${PROJECT}/rds/credentials}"
 
 log()  { printf '\033[1;36m[dr-restore]\033[0m %s\n' "$*"; }
 is_true() { [[ "${1:-}" == "1" || "${1:-}" == "true" || "${1:-}" == "TRUE" || "${1:-}" == "yes" ]]; }
+
+# ---------- Detach so a closed terminal can't kill the run ----------
+# The restore is long (~20-40 min) with silent waits. If launched from an
+# interactive terminal, re-exec ourselves in a BRAND-NEW SESSION in the
+# background, logging to a file, then return the prompt. A new session is fully
+# divorced from the terminal's process group, so closing the tab/window — in
+# Warp, iTerm, Terminal.app or VSCode — can't kill it. (Plain `nohup` only blocks
+# SIGHUP, not the process-group SIGKILL some terminals like Warp send when the
+# command block ends — that's why a nohup-only detach still died.) The new
+# session is created with `python3 os.setsid()` (macOS has no `setsid` binary),
+# and wrapped in `caffeinate -i` so an idle laptop won't sleep mid-run.
+#   - Skipped in CI / non-interactive (no tty on stdout) so output is captured.
+#   - Skipped once already detached (DR_DETACHED set) so it doesn't recurse.
+#   - Escape hatch: DR_FOREGROUND=1 runs inline (e.g. under your own screen/tmux).
+DR_LOG="${DR_LOG:-/tmp/dr-restore.log}"
+if [[ -z "${DR_DETACHED:-}" && "${DR_FOREGROUND:-0}" != "1" && -t 1 ]]; then
+  export DR_DETACHED=1
+  guard=""; command -v caffeinate >/dev/null 2>&1 && guard="caffeinate -i"
+  echo "dr-restore: running detached in a new session — safe to close this terminal."
+  echo "  log:    $DR_LOG"
+  echo "  follow: tail -f $DR_LOG"
+  if command -v python3 >/dev/null 2>&1; then
+    # python becomes a session leader (setsid), then exec's the (guarded) script.
+    python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
+      $guard bash "$0" "$@" >"$DR_LOG" 2>&1 </dev/null &
+  else
+    # Fallback with no python3: nohup — survives SIGHUP but not a group SIGKILL.
+    nohup $guard bash "$0" "$@" >"$DR_LOG" 2>&1 </dev/null &
+  fi
+  echo "  PID:    $!  (keeps running even if you close the terminal)"
+  exit 0
+fi
 
 START_EPOCH=$(date +%s)
 
