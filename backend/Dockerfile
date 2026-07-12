@@ -40,13 +40,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PATH="/home/app/.local/bin:${PATH}"
 
-# Runtime libs only (libpq for asyncpg, curl for healthcheck).
+# Runtime libs only (libpq for asyncpg). No curl: the container healthcheck below
+# uses Python (already present) instead, which drops curl + libcurl4t64 and their
+# recurring HIGH CVEs entirely. K8s uses its own httpGet probes regardless.
 # apt-get upgrade patches base-image OS package CVEs flagged by Trivy.
 RUN apt-get update \
     && apt-get upgrade -y \
     && apt-get install --no-install-recommends -y \
         libpq5 \
-        curl \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 1001 app \
     && useradd --system --uid 1001 --gid app --create-home --home-dir /home/app app
@@ -68,11 +69,12 @@ USER app
 
 EXPOSE 8000
 
+# Python-based healthcheck (no curl dependency). urlopen raises on connection
+# failure or HTTP >= 400, giving a non-zero exit; a 200 exits cleanly. Used by
+# docker/compose (K8s uses its own httpGet probes).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD curl --fail --silent http://localhost:8000/healthz || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz', timeout=3)" || exit 1
 
-# Single worker: on K8s we scale with replicas, not in-pod workers. Each worker
-# pays the full ADOT Application Signals instrumentation memory cost, so two
-# workers in a tight cgroup risk the kernel OOM-killing a worker (restart loop).
+# Single worker: on K8s we scale with replicas, not in-pod workers.
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", \
      "--workers", "1", "--access-log", "--no-server-header"]
