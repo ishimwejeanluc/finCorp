@@ -30,12 +30,9 @@
 #   REPLACE           default: 0  (1 forces a fresh restore even if the DB exists)
 #   NAMESPACE         default: ${PROJECT}
 #
-# When launched from an interactive terminal this re-execs itself DETACHED (nohup,
-# background) and logs to $DR_LOG (default /tmp/dr-restore.log) so a closed
-# terminal can't kill the long-running restore — follow it with `tail -f $DR_LOG`.
-#   DR_FOREGROUND=1   run inline instead of detaching (e.g. to watch it directly)
-#   DR_LOG            log file path when detached (default /tmp/dr-restore.log)
-# (Auto-skipped in CI / non-interactive runs so output is captured normally.)
+# Runs inline in the foreground and streams progress. It's a long job (~20-40 min);
+# to survive a closed terminal, launch it under tmux/screen or with:
+#   nohup bash scripts/dr-restore.sh >/tmp/dr-restore.log 2>&1 & tail -f /tmp/dr-restore.log
 #
 set -euo pipefail
 
@@ -60,38 +57,6 @@ CRED_SECRET_ID="${CRED_SECRET_ID:-${PROJECT}/rds/credentials}"
 
 log()  { printf '\033[1;36m[dr-restore]\033[0m %s\n' "$*"; }
 is_true() { [[ "${1:-}" == "1" || "${1:-}" == "true" || "${1:-}" == "TRUE" || "${1:-}" == "yes" ]]; }
-
-# ---------- Detach so a closed terminal can't kill the run ----------
-# The restore is long (~20-40 min) with silent waits. If launched from an
-# interactive terminal, re-exec ourselves in a BRAND-NEW SESSION in the
-# background, logging to a file, then return the prompt. A new session is fully
-# divorced from the terminal's process group, so closing the tab/window — in
-# Warp, iTerm, Terminal.app or VSCode — can't kill it. (Plain `nohup` only blocks
-# SIGHUP, not the process-group SIGKILL some terminals like Warp send when the
-# command block ends — that's why a nohup-only detach still died.) The new
-# session is created with `python3 os.setsid()` (macOS has no `setsid` binary),
-# and wrapped in `caffeinate -i` so an idle laptop won't sleep mid-run.
-#   - Skipped in CI / non-interactive (no tty on stdout) so output is captured.
-#   - Skipped once already detached (DR_DETACHED set) so it doesn't recurse.
-#   - Escape hatch: DR_FOREGROUND=1 runs inline (e.g. under your own screen/tmux).
-DR_LOG="${DR_LOG:-/tmp/dr-restore.log}"
-if [[ -z "${DR_DETACHED:-}" && "${DR_FOREGROUND:-0}" != "1" && -t 1 ]]; then
-  export DR_DETACHED=1
-  guard=""; command -v caffeinate >/dev/null 2>&1 && guard="caffeinate -i"
-  echo "dr-restore: running detached in a new session — safe to close this terminal."
-  echo "  log:    $DR_LOG"
-  echo "  follow: tail -f $DR_LOG"
-  if command -v python3 >/dev/null 2>&1; then
-    # python becomes a session leader (setsid), then exec's the (guarded) script.
-    python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
-      $guard bash "$0" "$@" >"$DR_LOG" 2>&1 </dev/null &
-  else
-    # Fallback with no python3: nohup — survives SIGHUP but not a group SIGKILL.
-    nohup $guard bash "$0" "$@" >"$DR_LOG" 2>&1 </dev/null &
-  fi
-  echo "  PID:    $!  (keeps running even if you close the terminal)"
-  exit 0
-fi
 
 START_EPOCH=$(date +%s)
 
@@ -207,13 +172,36 @@ fi
 # the primary region. Reset it to a fresh value we control, and attach the DR SG
 # (which already trusts the DR EKS cluster SG) so the app connects locally.
 log "Attaching DR security group + resetting master password..."
-NEW_PW="$(LC_ALL=C tr -dc 'A-Za-z0-9!#%^*_=+-' </dev/urandom | head -c 24)"
+# Generate the new password from a BOUNDED read of /dev/urandom, then slice in the
+# shell. Piping /dev/urandom straight into `tr … | head -c 24` hangs on macOS: head
+# exits after 24 bytes but tr never gets SIGPIPE, so it spins on the infinite stream
+# at ~100% CPU forever and the script never reaches modify-db-instance. Reading a
+# fixed 4 KB chunk lets tr hit EOF and exit; ${VAR:0:24} avoids an early-close pipe.
+# Charset stays RDS-Postgres-safe (no / @ " or space).
+NEW_PW="$(head -c 4096 /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9!#%^*_=+-')"
+NEW_PW="${NEW_PW:0:24}"
 aws rds modify-db-instance --db-instance-identifier "$NEW_DB_ID" \
   --vpc-security-group-ids "$RDS_SG_ID" \
   --master-user-password "$NEW_PW" \
   --apply-immediately --region "$DR_REGION" >/dev/null
+
+# Poll to available with visible status instead of a mute `aws rds wait`. A password
+# reset drops the instance into modifying/resetting-master-credentials for a few
+# minutes; the old silent wait made that look like a hang. Log each poll so it's
+# obviously alive. The leading sleep rides out the race where the instance still
+# reports "available" for a moment before --apply-immediately takes effect.
 sleep 10
-aws rds wait db-instance-available --db-instance-identifier "$NEW_DB_ID" --region "$DR_REGION"
+while true; do
+  STATUS=$(aws rds describe-db-instances --db-instance-identifier "$NEW_DB_ID" \
+    --region "$DR_REGION" --query 'DBInstances[0].DBInstanceStatus' --output text)
+  log "  modify status=$STATUS  elapsed=$(( $(date +%s) - START_EPOCH ))s"
+  case "$STATUS" in
+    available) break ;;
+    modifying|configuring-*|resetting-master-credentials|storage-optimization|backing-up|upgrading) ;;
+    *) echo "ERROR: unexpected DB status '$STATUS' during modify." >&2; exit 1 ;;
+  esac
+  sleep 20
+done
 
 # ---------- 4. Write the fresh DR-region credentials secret ----------
 read -r DB_USER DB_NAME DB_HOST DB_PORT <<EOF
