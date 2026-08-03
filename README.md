@@ -1,7 +1,7 @@
 # FinCorp — Secure Software Supply Chain + Cross-Region DR
 
-A 3-tier app (FastAPI backend, Express frontend, RDS Postgres, ElastiCache Redis)
-running on **Amazon EKS**, with:
+A 3-tier app (FastAPI backend, Express frontend, RDS Postgres) running on
+**Amazon EKS**, with:
 
 1. **A secure, auditable artifact pipeline** — AWS CodeArtifact proxies npm/pip,
    GitHub Actions builds and pushes **immutable** images to ECR, and the build
@@ -53,8 +53,8 @@ scripts/dr-*.sh           DR: backup-now, simulate-failure, restore (full rebuil
 infra/live-persistent/    survives the drill: backups, ECR+replication, OIDC, CodeArtifact
 infra/live-primary/       the live app+data stack (eu-west-1) — module.stack, rds_mode=create
 infra/live-dr/            the same stack rebuilt on failover (eu-west-2) — rds_mode=restore
-infra/modules/stack/      the reusable regional stack (network + eks/* + rds + elasticache + LB)
-infra/modules/            network ecr elasticache rds eks/* codeartifact github-oidc backup
+infra/modules/stack/      the reusable regional stack (network + eks/* + rds + LB)
+infra/modules/            network ecr rds eks/* codeartifact github-oidc backup
 ```
 
 ## Quick start

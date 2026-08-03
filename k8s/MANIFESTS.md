@@ -16,7 +16,7 @@ Per-file definition of every manifest in this directory: what object(s) it creat
 
 One resource is **NOT** in this directory because it has secret content that must not be committed:
 
-- `Secret: fincorp-db` — `POSTGRES_DSN` and `REDIS_URL`. Created at deploy time by [../scripts/deploy-eks-k8s.sh](../scripts/deploy-eks-k8s.sh), which reads AWS Secrets Manager and assembles the strings.
+- `Secret: fincorp-db` — `POSTGRES_DSN`. Created at deploy time by [../scripts/deploy-eks-k8s.sh](../scripts/deploy-eks-k8s.sh), which reads AWS Secrets Manager and assembles the string.
 
 ---
 
@@ -150,11 +150,6 @@ env:
       secretKeyRef:
         name: fincorp-db
         key: POSTGRES_DSN
-  - name: REDIS_URL
-    valueFrom:
-      secretKeyRef:
-        name: fincorp-db
-        key: REDIS_URL
 ```
 The `fincorp-db` Secret is created at deploy time, not from a manifest. If it's missing the pod fails with `CreateContainerConfigError`.
 
@@ -400,7 +395,7 @@ Namespace fincorp
    │
    ├── ServiceAccount backend ←─── used by Deployment backend
    ├── Deployment backend (label app=backend, container port name "http")
-   │     └── env from Secret fincorp-db (POSTGRES_DSN, REDIS_URL)
+   │     └── env from Secret fincorp-db (POSTGRES_DSN)
    ├── Service backend (selector app=backend, targetPort 8000)
    │
    ├── ServiceAccount frontend ←─── used by Deployment frontend

@@ -20,7 +20,7 @@ Apply the persistent layer first (its CI role is consumed by the regional stacks
 terraform -chdir=infra/live-persistent init
 terraform -chdir=infra/live-persistent apply
 
-# b) primary regional stack: VPC, EKS, RDS, Redis (eu-west-1)
+# b) primary regional stack: VPC, EKS, RDS (eu-west-1)
 terraform -chdir=infra/live-primary init
 terraform -chdir=infra/live-primary apply    # DR stack (live-dr) is applied only at failover
 ```

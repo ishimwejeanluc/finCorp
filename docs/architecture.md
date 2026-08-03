@@ -16,7 +16,6 @@ GitHub Actions and Terraform.
 | CI/CD | GitHub Actions + OIDC role `fincorp-gha-ci` | no static AWS keys |
 | Compute | EKS `fincorp` + managed node group | app behind ALB ingress |
 | Data | RDS Postgres `fincorp-db` (eu-west-1) | CMK-encrypted, tagged `Backup=fincorp` |
-| Cache | ElastiCache Redis | app-only, out of DR scope |
 | DR | AWS Backup plan + vaults (both regions) | daily backup + cross-region copy |
 
 ## Supply-chain flow
@@ -62,8 +61,8 @@ infra/
   live-primary/            live app+data stack, eu-west-1 (module.stack, rds_mode=create)
   live-dr/                 same stack rebuilt on failover, eu-west-2 (rds_mode=restore)
   modules/
-    stack/                 the reusable regional stack (network + eks/* + rds + elasticache + LB)
-    network/ ecr/ elasticache/ rds/ eks/*
+    stack/                 the reusable regional stack (network + eks/* + rds + LB)
+    network/ ecr/ rds/ eks/*
     codeartifact/ github-oidc/ backup/
 docs/                      this documentation set
 ```

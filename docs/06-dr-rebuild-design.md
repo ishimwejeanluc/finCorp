@@ -1,16 +1,23 @@
 # 6 — DR Redesign: Full-Region Rebuild (design doc)
 
-**Status:** proposed — for review before implementation
+**Status:** implemented (historical design record — describes the original plan)
 **Author:** DR working session, 2026-07-09
 **Supersedes the DB-only model in** [04-dr-setup.md](04-dr-setup.md) / [05-dr-runbook.md](05-dr-runbook.md)
+
+> **Note — since trimmed:** after this design was built, the stack was slimmed for
+> faster apply/destroy: **ElastiCache/Redis**, the **CloudWatch observability
+> addon** (Container Insights / Application Signals), and the **VPC interface
+> endpoints** were all removed. So mentions of Redis/ElastiCache and those addons
+> below reflect the *original* design, not the current infra (app is Postgres-only
+> now). Everything else (the persistent/primary/dr split, rebuild flow) is current.
 
 ---
 
 ## 1. What changes and why
 
 ### Today (DB-only failover)
-The app runs permanently in **eu-west-1**. DR is a "pilot light": AWS Backup copies
-the RDS snapshot to **eu-west-2** daily, and on a drill we delete *only the DB*,
+The app runs permanently in **eu-west-1**. DR is DB-only backup/restore: AWS Backup
+copies the RDS snapshot to **eu-west-2** daily, and on a drill we delete *only the DB*,
 restore it into a bare eu-west-2 landing VPC, and **re-point the still-running
 eu-west-1 app** at that restored DB **across regions**.
 
@@ -25,8 +32,9 @@ parameterized template, and the DB is **restored into that same eu-west-2 VPC**,
 the rebuilt app and the restored DB **sit together and connect locally** — no
 cross-region reach, no VPC peering.
 
-This is a **cold-standby / rebuild** posture (was: warm DB-only). It is a
-deliberate trade: cleaner "everything lives in one region" story, at the cost of a
+This is a **Backup & Restore** posture (AWS's coldest DR strategy — nothing runs
+in DR until failover; was: DB-only restore). It is a deliberate trade: cleaner
+"everything lives in one region" story + near-zero standing cost, at the cost of a
 longer RTO (§7).
 
 ---
@@ -41,7 +49,7 @@ stack ports to eu-west-2 unchanged. Three things were decided up front:
 |---|---|---|
 | 1 | **ECR is regional** — a rebuilt eu-west-2 ECR is empty, nothing to pull. | **ECR cross-region replication** eu-west-1 → eu-west-2 (images always present in DR, zero failover steps). |
 | 2 | **TF state backend is in eu-west-1** — unreachable in a *real* region loss. | Accept for the drill (we delete infra, not the region — the state bucket + DR vault survive). DR stack gets its **own state key**. Documented as a known limitation; production would replicate state to a third region. |
-| 3 | **RTO** — rebuilding EKS from zero is slow. | Accepted as inherent to cold-standby (§7). |
+| 3 | **RTO** — rebuilding EKS from zero is slow. | Accepted as inherent to Backup & Restore (§7). |
 
 ---
 

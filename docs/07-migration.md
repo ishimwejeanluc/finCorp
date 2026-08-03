@@ -6,7 +6,7 @@ reusable `infra/modules/stack`:
 | Root | State key | What it holds | Region |
 |---|---|---|---|
 | `infra/live-persistent` | `fincorp/persistent.tfstate` | backup vaults + plan, ECR + replication, GitHub OIDC, CodeArtifact | eu-west-1 (+ eu-west-2 vault) |
-| `infra/live-primary` | `fincorp/primary.tfstate` | `module.stack` — VPC/EKS/RDS/Redis (the live app) | eu-west-1 |
+| `infra/live-primary` | `fincorp/primary.tfstate` | `module.stack` — VPC/EKS/RDS (the live app) | eu-west-1 |
 | `infra/live-dr` | `fincorp/dr.tfstate` | same `module.stack`, `rds_mode=restore`, applied at failover | eu-west-2 |
 
 Old state key `fincorp/terraform.tfstate` (used by `live-fincorp`) is retired.
@@ -105,7 +105,10 @@ for addr in \
 done
 
 # --- Move the STACK resources: old -> primary.tfstate, renaming under module.stack ---
-for m in network rds elasticache eks_cluster eks_nodes eks_addons eks_oidc ; do
+# NOTE: elasticache/Redis was dropped from the stack. Do NOT move module.elasticache
+# or aws_security_group_rule.redis_from_cluster — leave them in old.tfstate so the
+# final `live-fincorp destroy` removes them.
+for m in network rds eks_cluster eks_nodes eks_addons eks_oidc ; do
   terraform state mv -state=old.tfstate -state-out=primary.tfstate "module.$m" "module.stack.module.$m"
 done
 # Root-level stack resources that moved into the module:
@@ -115,7 +118,7 @@ terraform state mv -state=old.tfstate -state-out=primary.tfstate aws_iam_policy.
 terraform state mv -state=old.tfstate -state-out=primary.tfstate aws_iam_role.lb_controller              module.stack.aws_iam_role.lb_controller
 terraform state mv -state=old.tfstate -state-out=primary.tfstate aws_iam_role_policy_attachment.lb_controller_irsa module.stack.aws_iam_role_policy_attachment.lb_controller_irsa
 terraform state mv -state=old.tfstate -state-out=primary.tfstate 'aws_security_group_rule.rds_from_cluster'   module.stack.aws_security_group_rule.rds_from_cluster
-terraform state mv -state=old.tfstate -state-out=primary.tfstate 'aws_security_group_rule.redis_from_cluster' module.stack.aws_security_group_rule.redis_from_cluster
+# (redis_from_cluster intentionally NOT moved — Redis was dropped; let destroy remove it)
 terraform state mv -state=old.tfstate -state-out=primary.tfstate 'aws_ec2_tag.public_subnet_elb_role'          'module.stack.aws_ec2_tag.public_subnet_elb_role'
 terraform state mv -state=old.tfstate -state-out=primary.tfstate 'aws_ec2_tag.private_subnet_internal_elb_role' 'module.stack.aws_ec2_tag.private_subnet_internal_elb_role'
 terraform state mv -state=old.tfstate -state-out=primary.tfstate 'aws_ec2_tag.subnet_cluster_owner'            'module.stack.aws_ec2_tag.subnet_cluster_owner'

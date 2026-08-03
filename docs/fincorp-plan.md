@@ -3,7 +3,11 @@
 > **Lab:** Artifact Management & Disaster Recovery
 > **Platform:** Amazon EKS (ECS removed) · **CI/CD:** GitHub Actions · **IaC:** Terraform
 > **Primary region:** `eu-west-1` (Ireland) · **DR region:** `eu-west-2` (London)
-> **Status:** PLAN — nothing implemented yet, pending approval.
+> **Status:** HISTORICAL — this is the original planning doc, now implemented and
+> since evolved. It predates the persistent/primary/dr split and the removal of
+> ElastiCache/Redis. For current state see [architecture.md](architecture.md),
+> [00-deploy.md](00-deploy.md), [06-dr-rebuild-design.md](06-dr-rebuild-design.md),
+> and [07-migration.md](07-migration.md). Kept for context; do not follow verbatim.
 
 ---
 

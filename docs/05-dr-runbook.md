@@ -30,7 +30,7 @@ present in the eu-west-2 ECR.
 
 ## 1. Simulate the FULL region failure  ⏱️ start the clock
 
-Destroy the **entire** primary stack (app + EKS + Redis + RDS + VPC). The
+Destroy the **entire** primary stack (app + EKS + RDS + VPC). The
 persistent layer (backups, ECR, OIDC) and the state bucket are separate and are
 left intact.
 
@@ -99,10 +99,13 @@ kubectl -n fincorp get ingress          # ALB hostname to hit
 | **RPO** | ≤ 24 h | daily backup schedule (tighten the cron for a smaller RPO) |
 | **RTO** | ~25–40 min | from-zero rebuild: EKS control plane (~10–15 min) + nodes/addons + LB controller + app rollout, in parallel with the DB restore |
 
-> This is a **cold-standby (rebuild)** posture — a larger RTO than the previous
-> DB-only failover, in exchange for the whole stack living in one region with no
-> cross-region dependency. To shrink RTO, keep a minimal always-on node group in
-> eu-west-2 (warm standby) at standing cost.
+> This is a **Backup & Restore** posture (AWS's coldest DR strategy) — nothing
+> runs in eu-west-2 until failover, so the RTO is larger than the previous DB-only
+> restore, in exchange for near-zero standing cost and the whole stack living in
+> one region with no cross-region dependency. To shrink RTO you'd move toward a
+> **standby** strategy: *Pilot Light* (a live cross-region RDS read replica) or
+> *Warm Standby* (that plus a minimal always-on EKS node group in eu-west-2) —
+> both at extra standing cost.
 
 ## 4. Fail back / clean up after the demo
 ```bash
