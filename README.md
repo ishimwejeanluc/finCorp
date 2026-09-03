@@ -7,7 +7,7 @@ A 3-tier app (FastAPI backend, Express frontend, RDS Postgres) running on
    GitHub Actions builds and pushes **immutable** images to ECR, and the build
    **fails on High/Critical** vulnerabilities.
 2. **Cross-region Disaster Recovery** — RDS in `eu-west-1`, AWS Backup daily
-   snapshots copied to `eu-west-2`, with a scripted restore inside a 30-minute RTO.
+   snapshots copied to `eu-central-1`, with a scripted restore inside a 30-minute RTO.
 
 > Built by forking the EKS lab and re-namespacing everything to `fincorp`
 > (region, VPC CIDR, cluster, ECR repos, state key) so it coexists with the
@@ -15,7 +15,7 @@ A 3-tier app (FastAPI backend, Express frontend, RDS Postgres) running on
 
 ## At a glance
 
-| | Primary `eu-west-1` | DR `eu-west-2` |
+| | Primary `eu-west-1` | DR `eu-central-1` |
 |---|---|---|
 | Compute | EKS `fincorp` + node group | — |
 | Data | RDS `fincorp-db` (CMK-encrypted) | restored `fincorp-db-restored` |
@@ -52,7 +52,7 @@ k8s/                      manifests (namespace: fincorp)
 scripts/dr-*.sh           DR: backup-now, simulate-failure, restore (full rebuild)
 infra/live-persistent/    survives the drill: backups, ECR+replication, OIDC, CodeArtifact
 infra/live-primary/       the live app+data stack (eu-west-1) — module.stack, rds_mode=create
-infra/live-dr/            the same stack rebuilt on failover (eu-west-2) — rds_mode=restore
+infra/live-dr/            the same stack rebuilt on failover (eu-central-1) — rds_mode=restore
 infra/modules/stack/      the reusable regional stack (network + eks/* + rds + LB)
 infra/modules/            network ecr rds eks/* codeartifact github-oidc backup
 ```

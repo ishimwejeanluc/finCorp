@@ -2,7 +2,7 @@
 
 > **Lab:** Artifact Management & Disaster Recovery
 > **Platform:** Amazon EKS (ECS removed) · **CI/CD:** GitHub Actions · **IaC:** Terraform
-> **Primary region:** `eu-west-1` (Ireland) · **DR region:** `eu-west-2` (London)
+> **Primary region:** `eu-west-1` (Ireland) · **DR region:** `eu-central-1` (London)
 > **Status:** HISTORICAL — this is the original planning doc, now implemented and
 > since evolved. It predates the persistent/primary/dr split and the removal of
 > ElastiCache/Redis. For current state see [architecture.md](architecture.md),
@@ -19,9 +19,9 @@
    - **Constraint:** the build **fails on High/Critical** vulnerabilities.
 2. **Cross-region Disaster Recovery**:
    - **RDS** database in `eu-west-1`.
-   - **AWS Backup** daily snapshots **copied to `eu-west-2`** (cross-region copy).
+   - **AWS Backup** daily snapshots **copied to `eu-central-1`** (cross-region copy).
    - **Simulate** a region failure by **deleting the primary DB**.
-   - **Recover** by **restoring in `eu-west-2`** from the copied backup — within **30 minutes**.
+   - **Recover** by **restoring in `eu-central-1`** from the copied backup — within **30 minutes**.
 
 ---
 
@@ -49,7 +49,7 @@ Separate lab, **same AWS account** as the k8s lab → everything moves to a new 
 |---|---|---|
 | Project slug | `shopnow-eks` | `fincorp` |
 | Primary region | `eu-west-1` | `eu-west-1` |
-| DR region | — | `eu-west-2` |
+| DR region | — | `eu-central-1` |
 | TF state bucket | `shopnow-tfstate-497924967546` | **`fincorp-tfstate-<acct>`** (own bucket) |
 | TF state **key** | `shopnow-eks/terraform.tfstate` | **`fincorp/terraform.tfstate`** |
 | TF lock table | `shopnow-tfstate-lock` | **`fincorp-tfstate-lock`** |
@@ -86,7 +86,7 @@ Separate lab, **same AWS account** as the k8s lab → everything moves to a new 
         │  AWS Backup vault (daily plan) ──copy──┐              │
         └─────────────────────────────────────────┼────────────┘
                                                    ▼
-        ┌──────────────── eu-west-2 (DR) ──────────────────────┐
+        ┌──────────────── eu-central-1 (DR) ──────────────────────┐
         │  AWS Backup vault (KMS-encrypted) ◀── cross-region    │
         │  recovery points  ──restore──▶ fincorp-db-restored    │
         └───────────────────────────────────────────────────────┘
@@ -116,7 +116,7 @@ infra/
 **Providers in `live-fincorp/`:**
 ```hcl
 provider "aws" { region = "eu-west-1" }                # default = primary
-provider "aws" { alias = "dr"  region = "eu-west-2" }  # DR vault + KMS
+provider "aws" { alias = "dr"  region = "eu-central-1" }  # DR vault + KMS
 ```
 
 ---
@@ -157,10 +157,10 @@ provider "aws" { alias = "dr"  region = "eu-west-2" }  # DR vault + KMS
 
 ### 6.5 AWS Backup DR (`modules/dr/backup`)
 - KMS CMK in **each** region (cross-region copy of encrypted backups needs a destination-region key).
-- `aws_backup_vault` in `eu-west-1` + `aws_backup_vault` in `eu-west-2` (`provider = aws.dr`).
-- `aws_backup_plan`: daily rule `cron(0 5 * * ? *)`, `copy_action { destination_vault_arn = <eu-west-2 vault> }`, retention 7 days.
+- `aws_backup_vault` in `eu-west-1` + `aws_backup_vault` in `eu-central-1` (`provider = aws.dr`).
+- `aws_backup_plan`: daily rule `cron(0 5 * * ? *)`, `copy_action { destination_vault_arn = <eu-central-1 vault> }`, retention 7 days.
 - `aws_backup_selection` by tag `Backup = fincorp` → selects the RDS instance.
-- For the demo: trigger an on-demand backup so a recovery point exists in `eu-west-2` before the simulation.
+- For the demo: trigger an on-demand backup so a recovery point exists in `eu-central-1` before the simulation.
 
 ---
 
@@ -176,7 +176,7 @@ provider "aws" { alias = "dr"  region = "eu-west-2" }  # DR vault + KMS
 7. **Deploy:** `aws eks update-kubeconfig` + `kubectl set image deploy/... =<repo>:<git-sha>` — commit-pinned, never `latest`.
 
 ### `.github/workflows/dr-restore.yml` (`workflow_dispatch`)
-- Authenticates to `eu-west-2`, finds latest recovery point, runs `aws backup start-restore-job`, waits, prints the new endpoint — scripted recovery for the walkthrough.
+- Authenticates to `eu-central-1`, finds latest recovery point, runs `aws backup start-restore-job`, waits, prints the new endpoint — scripted recovery for the walkthrough.
 
 ### App / Dockerfile changes
 - Frontend: `.npmrc` pointing at CodeArtifact, token via BuildKit secret mount.
@@ -189,9 +189,9 @@ provider "aws" { alias = "dr"  region = "eu-west-2" }  # DR vault + KMS
 
 The 30-min RTO is **restore time**, not copy time — the cross-region copy runs daily ahead of any incident.
 
-1. **Steady state:** daily backup + cross-region copy → recovery points already in `eu-west-2`.
+1. **Steady state:** daily backup + cross-region copy → recovery points already in `eu-central-1`.
 2. **Simulate failure:** delete the primary RDS instance in `eu-west-1` (`deletion_protection=false`, skip final snapshot).
-3. **Recover:** run `dr-restore.yml` (or `scripts/dr-restore.sh`) → `start-restore-job` from the `eu-west-2` vault → new `fincorp-db-restored`.
+3. **Recover:** run `dr-restore.yml` (or `scripts/dr-restore.sh`) → `start-restore-job` from the `eu-central-1` vault → new `fincorp-db-restored`.
 4. **Validate:** connect, run a row-count / seed-data check, capture start/end timestamps to prove RTO < 30 min.
 5. Documented with **both** the console click-path and the CLI/automation path.
 
@@ -207,7 +207,7 @@ The 30-min RTO is **restore time**, not copy time — the cross-region copy runs
 ---
 
 ## 10. Execution phases (after approval)
-1. **Cleanup & rename:** remove ECS stack/docs; rename `live-eks` → `live-fincorp`; re-key state; rename to `fincorp`, new CIDR, `eu-west-2` DR provider.
+1. **Cleanup & rename:** remove ECS stack/docs; rename `live-eks` → `live-fincorp`; re-key state; rename to `fincorp`, new CIDR, `eu-central-1` DR provider.
 2. **Terraform:** CodeArtifact, GitHub OIDC, RDS instance, AWS Backup dual-region modules → wire into `live-fincorp`.
 3. **App:** Dockerfile + CodeArtifact wiring.
 4. **CI/CD:** GitHub Actions build/scan/push/deploy + DR restore workflow.

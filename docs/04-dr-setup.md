@@ -1,7 +1,7 @@
 # 4 — Disaster Recovery Setup (AWS Backup + ECR replication, cross-region)
 
 Backup module: `infra/modules/backup`, in the **persistent layer**
-(`infra/live-persistent`) · Primary `eu-west-1` → DR `eu-west-2`
+(`infra/live-persistent`) · Primary `eu-west-1` → DR `eu-central-1`
 
 > Layout: the DR-critical pieces below live in `infra/live-persistent` so they
 > survive the drill; the app/DB live in `infra/live-primary` (and are rebuilt in
@@ -13,21 +13,21 @@ Backup module: `infra/modules/backup`, in the **persistent layer**
 | Resource | Layer / Region | Purpose |
 |---|---|---|
 | KMS CMK (primary) | persistent / eu-west-1 | encrypts the primary vault |
-| KMS CMK (dr) | persistent / eu-west-2 | encrypts the DR vault |
+| KMS CMK (dr) | persistent / eu-central-1 | encrypts the DR vault |
 | Backup vault `fincorp-backup-primary` | persistent / eu-west-1 | holds daily recovery points |
-| Backup vault `fincorp-backup-dr` | persistent / eu-west-2 | receives cross-region copies |
+| Backup vault `fincorp-backup-dr` | persistent / eu-central-1 | receives cross-region copies |
 | Backup plan `fincorp-daily-dr` | persistent / eu-west-1 | daily rule + `copy_action` to DR vault |
 | Backup selection | persistent | matches resources tagged `Backup=fincorp` (the primary DB) |
 | IAM role `fincorp-backup-role` | persistent | AWS Backup service role (backup + restore) |
-| ECR replication (eu-west-1 → eu-west-2) | persistent | mirrors `fincorp/*` images to DR so the rebuilt stack can pull locally |
-| DB subnet group `fincorp-db-subnets` | dr / eu-west-2 | restore landing (built by `module.stack` in `infra/live-dr`, `rds_mode=restore`) |
+| ECR replication (eu-west-1 → eu-central-1) | persistent | mirrors `fincorp/*` images to DR so the rebuilt stack can pull locally |
+| DB subnet group `fincorp-db-subnets` | dr / eu-central-1 | restore landing (built by `module.stack` in `infra/live-dr`, `rds_mode=restore`) |
 
 ## Why a customer-managed KMS key matters
 
 AWS Backup can only copy an **encrypted** recovery point to another region when the
 source is encrypted with a **customer-managed** CMK (not the default `aws/rds`
 key). The `rds` module therefore encrypts `fincorp-db` with its own CMK, and the
-DR vault has its own CMK in eu-west-2. Without this, cross-region copy fails.
+DR vault has its own CMK in eu-central-1. Without this, cross-region copy fails.
 
 ## The backup plan
 
@@ -64,13 +64,13 @@ aws backup start-backup-job \
 # 2. Wait for it to COMPLETE, then confirm it copied to the DR vault
 aws backup list-recovery-points-by-backup-vault \
   --backup-vault-name fincorp-backup-dr \
-  --by-resource-type RDS --region eu-west-2
+  --by-resource-type RDS --region eu-central-1
 ```
 
 > Note: the daily rule's `copy_action` auto-copies scheduled backups to DR. An
 > on-demand backup may need a manual `start-copy-job` to the DR vault if you want
 > it copied immediately — the `list-recovery-points-by-backup-vault` check above
-> tells you when a copy is present in eu-west-2.
+> tells you when a copy is present in eu-central-1.
 
 When a recovery point shows up in `fincorp-backup-dr`, you are ready to run the
 [DR runbook](05-dr-runbook.md).

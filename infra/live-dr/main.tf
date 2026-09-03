@@ -1,5 +1,5 @@
 # ============================================================================
-# DR REGIONAL STACK — eu-west-2.
+# DR REGIONAL STACK — eu-central-1.
 #
 # The SAME module.stack as ../live-primary, parameterized for the DR region and
 # rds_mode = "restore" (Terraform builds everything EXCEPT the DB instance).
@@ -19,7 +19,7 @@ terraform {
   }
 
   backend "s3" {
-    bucket       = "fincorp-tfstate-515966510180"
+    bucket       = "fincorp-tfstate-515966510180-eu-west-1"
     key          = "fincorp/dr.tfstate"
     region       = "eu-west-1"
     use_lockfile = true
@@ -42,7 +42,7 @@ provider "aws" {
 data "terraform_remote_state" "persistent" {
   backend = "s3"
   config = {
-    bucket = "fincorp-tfstate-515966510180"
+    bucket = "fincorp-tfstate-515966510180-eu-west-1"
     key    = "fincorp/persistent.tfstate"
     region = "eu-west-1"
   }

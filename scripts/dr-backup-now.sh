@@ -12,7 +12,7 @@
 # Required:
 #   BACKUP_ROLE_ARN   AWS Backup service role (terraform -chdir=infra/live-persistent output -raw backup_role_arn)
 # Optional (defaults):
-#   PROJECT=fincorp  PRIMARY_REGION=eu-west-1  DR_REGION=eu-west-2
+#   PROJECT=fincorp  PRIMARY_REGION=eu-west-1  DR_REGION=eu-central-1
 #   DB_ID=${PROJECT}-db  PRIMARY_VAULT=${PROJECT}-backup-primary  DR_VAULT=${PROJECT}-backup-dr
 #
 set -euo pipefail
@@ -23,7 +23,7 @@ export AWS_MAX_ATTEMPTS="${AWS_MAX_ATTEMPTS:-10}"
 
 PROJECT="${PROJECT:-fincorp}"
 PRIMARY_REGION="${PRIMARY_REGION:-eu-west-1}"
-DR_REGION="${DR_REGION:-eu-west-2}"
+DR_REGION="${DR_REGION:-eu-central-1}"
 DB_ID="${DB_ID:-${PROJECT}-db}"
 PRIMARY_VAULT="${PRIMARY_VAULT:-${PROJECT}-backup-primary}"
 DR_VAULT="${DR_VAULT:-${PROJECT}-backup-dr}"

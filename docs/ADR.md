@@ -45,7 +45,7 @@ is renamed to `fincorp` with VPC `10.20.0.0/16`.
 table, resource names, and CIDRs — so nothing clashes in a shared account.
 **Trade-off:** one extra bootstrap apply to create the bucket/table. One-time.
 
-## ADR-7: Minimal DR network in eu-west-2
+## ADR-7: Minimal DR network in eu-central-1
 **Decision:** create a small VPC + 2 subnets + DB subnet group in the DR region.
 **Why:** a restored RDS instance needs a DB subnet group in-region; this makes the
 restore target deterministic instead of depending on a default VPC.

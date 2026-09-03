@@ -1,7 +1,7 @@
 variable "aws_region" {
   description = "DR region. The stack is rebuilt here on failover; the DB is restored into this VPC."
   type        = string
-  default     = "eu-west-2"
+  default     = "eu-central-1"
 }
 
 variable "project" {

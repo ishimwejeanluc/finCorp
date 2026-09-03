@@ -21,7 +21,7 @@ terraform {
   }
 
   backend "s3" {
-    bucket       = "fincorp-tfstate-515966510180"
+    bucket       = "fincorp-tfstate-515966510180-eu-west-1"
     key          = "fincorp/persistent.tfstate"
     region       = "eu-west-1"
     use_lockfile = true
@@ -42,7 +42,7 @@ provider "aws" {
   }
 }
 
-# DR provider (eu-west-2) — cross-region AWS Backup vault + KMS.
+# DR provider (eu-central-1) — cross-region AWS Backup vault + KMS.
 provider "aws" {
   alias  = "dr"
   region = var.dr_region
@@ -65,7 +65,7 @@ module "ecr" {
   repositories = ["backend", "frontend"]
 }
 
-# Cross-region replication so the rebuilt DR stack (eu-west-2) can pull images
+# Cross-region replication so the rebuilt DR stack (eu-central-1) can pull images
 # locally after a full primary-region loss. Replication auto-creates the repos
 # in the destination region and keeps them in sync.
 resource "aws_ecr_replication_configuration" "this" {

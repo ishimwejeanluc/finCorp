@@ -5,9 +5,9 @@ reusable `infra/modules/stack`:
 
 | Root | State key | What it holds | Region |
 |---|---|---|---|
-| `infra/live-persistent` | `fincorp/persistent.tfstate` | backup vaults + plan, ECR + replication, GitHub OIDC, CodeArtifact | eu-west-1 (+ eu-west-2 vault) |
+| `infra/live-persistent` | `fincorp/persistent.tfstate` | backup vaults + plan, ECR + replication, GitHub OIDC, CodeArtifact | eu-west-1 (+ eu-central-1 vault) |
 | `infra/live-primary` | `fincorp/primary.tfstate` | `module.stack` — VPC/EKS/RDS (the live app) | eu-west-1 |
-| `infra/live-dr` | `fincorp/dr.tfstate` | same `module.stack`, `rds_mode=restore`, applied at failover | eu-west-2 |
+| `infra/live-dr` | `fincorp/dr.tfstate` | same `module.stack`, `rds_mode=restore`, applied at failover | eu-central-1 |
 
 Old state key `fincorp/terraform.tfstate` (used by `live-fincorp`) is retired.
 
@@ -65,13 +65,13 @@ terraform -chdir=live-primary init
 terraform -chdir=live-primary apply
 
 # 5. Seed images + a recovery point.
-#    - Run the build-and-push pipeline (pushes to eu-west-1 ECR; replication copies to eu-west-2).
+#    - Run the build-and-push pipeline (pushes to eu-west-1 ECR; replication copies to eu-central-1).
 #    - Deploy the app:      AWS_REGION=eu-west-1 scripts/deploy-eks-k8s.sh --ensure-lb-controller
 #    - Seed the DB, then:   BACKUP_ROLE_ARN=... scripts/dr-backup-now.sh
 ```
 
 After step 5 you have a recovery point in the DR vault and images replicated to
-eu-west-2 — you're ready for the drill (docs/05-dr-runbook.md).
+eu-central-1 — you're ready for the drill (docs/05-dr-runbook.md).
 
 Finally, delete the retired root:
 ```bash

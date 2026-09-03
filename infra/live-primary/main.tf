@@ -3,7 +3,7 @@
 #
 # The live application + data stack. This is the ONLY layer simulate-failure
 # destroys (the persistent layer + DR recovery points survive). Recovery rebuilds
-# the identical stack in eu-west-2 from ../live-dr (same module.stack).
+# the identical stack in eu-central-1 from ../live-dr (same module.stack).
 # ============================================================================
 
 terraform {
@@ -15,7 +15,7 @@ terraform {
   }
 
   backend "s3" {
-    bucket       = "fincorp-tfstate-515966510180"
+    bucket       = "fincorp-tfstate-515966510180-eu-west-1"
     key          = "fincorp/primary.tfstate"
     region       = "eu-west-1"
     use_lockfile = true
@@ -39,7 +39,7 @@ provider "aws" {
 data "terraform_remote_state" "persistent" {
   backend = "s3"
   config = {
-    bucket = "fincorp-tfstate-515966510180"
+    bucket = "fincorp-tfstate-515966510180-eu-west-1"
     key    = "fincorp/persistent.tfstate"
     region = "eu-west-1"
   }

@@ -17,8 +17,8 @@
 
 ### Today (DB-only failover)
 The app runs permanently in **eu-west-1**. DR is DB-only backup/restore: AWS Backup
-copies the RDS snapshot to **eu-west-2** daily, and on a drill we delete *only the DB*,
-restore it into a bare eu-west-2 landing VPC, and **re-point the still-running
+copies the RDS snapshot to **eu-central-1** daily, and on a drill we delete *only the DB*,
+restore it into a bare eu-central-1 landing VPC, and **re-point the still-running
 eu-west-1 app** at that restored DB **across regions**.
 
 - Simulation ≠ region failure — the app/EKS never go down.
@@ -27,8 +27,8 @@ eu-west-1 app** at that restored DB **across regions**.
 
 ### Target (full-region rebuild)
 Treat a drill as a **true loss of eu-west-1** (app **and** DB gone together).
-Recovery = **Terraform re-creates the identical stack in eu-west-2** from one
-parameterized template, and the DB is **restored into that same eu-west-2 VPC**, so
+Recovery = **Terraform re-creates the identical stack in eu-central-1** from one
+parameterized template, and the DB is **restored into that same eu-central-1 VPC**, so
 the rebuilt app and the restored DB **sit together and connect locally** — no
 cross-region reach, no VPC peering.
 
@@ -43,11 +43,11 @@ longer RTO (§7).
 
 Feasible. The modules are already region-clean — `network` derives region/AZs from
 data sources, and `rds`/`eks`/`elasticache` take injected VPC/subnet IDs — so the
-stack ports to eu-west-2 unchanged. Three things were decided up front:
+stack ports to eu-central-1 unchanged. Three things were decided up front:
 
 | # | Issue | Decision |
 |---|---|---|
-| 1 | **ECR is regional** — a rebuilt eu-west-2 ECR is empty, nothing to pull. | **ECR cross-region replication** eu-west-1 → eu-west-2 (images always present in DR, zero failover steps). |
+| 1 | **ECR is regional** — a rebuilt eu-central-1 ECR is empty, nothing to pull. | **ECR cross-region replication** eu-west-1 → eu-central-1 (images always present in DR, zero failover steps). |
 | 2 | **TF state backend is in eu-west-1** — unreachable in a *real* region loss. | Accept for the drill (we delete infra, not the region — the state bucket + DR vault survive). DR stack gets its **own state key**. Documented as a known limitation; production would replicate state to a third region. |
 | 3 | **RTO** — rebuilding EKS from zero is slow. | Accepted as inherent to Backup & Restore (§7). |
 
@@ -69,14 +69,14 @@ infra/
     network/  eks/*  rds/  elasticache/  ecr/  backup/  github-oidc/  codeartifact/   # unchanged
   live-persistent/    # NEW — survives the drill (never destroyed)
       backup module (vaults/KMS/plan/role, cross-region copy)
-      ecr repos + aws_ecr_replication_configuration  (eu-west-1 -> eu-west-2)
+      ecr repos + aws_ecr_replication_configuration  (eu-west-1 -> eu-central-1)
       github-oidc + codeartifact  (account-level / build-time)
       state key: fincorp/persistent.tfstate
   live-primary/       # RENAMED from live-fincorp — region = eu-west-1
       module.stack { region = eu-west-1, vpc_cidr = 10.20.0.0/16, rds_mode = "create" }
       state key: fincorp/primary.tfstate
-  live-dr/            # NEW — region = eu-west-2, applied only at failover
-      module.stack { region = eu-west-2, vpc_cidr = 10.40.0.0/16, rds_mode = "restore" }
+  live-dr/            # NEW — region = eu-central-1, applied only at failover
+      module.stack { region = eu-central-1, vpc_cidr = 10.40.0.0/16, rds_mode = "restore" }
       state key: fincorp/dr.tfstate
 ```
 
@@ -118,13 +118,13 @@ In `live-persistent`, add to the ECR concern:
 resource "aws_ecr_replication_configuration" "this" {
   replication_configuration {
     rule {
-      destination { region = var.dr_region }   # eu-west-2
+      destination { region = var.dr_region }   # eu-central-1
     }
   }
 }
 ```
 
-Replication auto-creates the repos in eu-west-2 and keeps images in sync, so the
+Replication auto-creates the repos in eu-central-1 and keeps images in sync, so the
 rebuilt DR nodes can pull `fincorp/backend` + `fincorp/frontend` immediately.
 
 ---
@@ -137,7 +137,7 @@ network), leaving the persistent layer intact.
 
 Flow:
 1. **Safety gate (unchanged):** refuse unless a `COMPLETED` RDS recovery point
-   exists in `fincorp-backup-dr` (eu-west-2). Nothing to rebuild-to otherwise.
+   exists in `fincorp-backup-dr` (eu-central-1). Nothing to rebuild-to otherwise.
 2. **Explicit confirmation** (type the project name).
 3. Start the RTO clock.
 4. `cd infra/live-primary && terraform destroy -auto-approve`
@@ -154,7 +154,7 @@ Flow:
 ## 5. Rewrite: `dr-restore.sh` + `dr-restore.yml` (Terraform + DB restore + wire-up)
 
 **Now:** DB-only restore, then re-point the eu-west-1 app cross-region.
-**Target:** orchestrate the full rebuild in eu-west-2, in order:
+**Target:** orchestrate the full rebuild in eu-central-1, in order:
 
 1. **Rebuild infra:** `cd infra/live-dr && terraform init && terraform apply -auto-approve`
    → VPC 10.40.0.0/16, EKS cluster + nodes + addons + LB controller, ElastiCache,
@@ -170,13 +170,13 @@ Flow:
 5. Report endpoint + elapsed vs RTO.
 
 Workflow (`dr-restore.yml`) input changes:
-- `aws-region` → `eu-west-2` for the whole job (already is).
+- `aws-region` → `eu-central-1` for the whole job (already is).
 - New step order: **terraform apply (DR)** → restore DB → deploy app.
 - Drop `repoint_app` (the old "keep app in primary" path no longer exists);
   replace with `rebuild_infra` (default true) so the restore can be re-run
   idempotently against an already-built DR stack.
 - Runner needs Terraform + the CI OIDC role must be allowed to apply the DR stack
-  (it already has broad rights; confirm state-bucket + eu-west-2 permissions).
+  (it already has broad rights; confirm state-bucket + eu-central-1 permissions).
 
 ---
 
@@ -191,7 +191,7 @@ etc. To avoid destroy/recreate of live infra:
 - Move the `backup`, `ecr`, `github-oidc`, `codeartifact` resources into
   `live-persistent` state via `terraform state mv -state-out` (or
   `terraform import`), then remove them from the primary root.
-- The inline eu-west-2 DR VPC (`aws_vpc.dr`, subnets, subnet group) currently in
+- The inline eu-central-1 DR VPC (`aws_vpc.dr`, subnets, subnet group) currently in
   `live-fincorp` is **deleted** — the DR VPC is now produced by `live-dr`'s
   `module.stack`. It's empty today, so a destroy/recreate is safe.
 

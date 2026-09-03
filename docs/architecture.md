@@ -4,7 +4,7 @@ Secure software supply chain + cross-region disaster recovery, on EKS, driven by
 GitHub Actions and Terraform.
 
 - **Primary region:** `eu-west-1` (Ireland)
-- **DR region:** `eu-west-2` (London)
+- **DR region:** `eu-central-1` (London)
 - **Project namespace:** `fincorp` (isolated from the `shopnow-eks` lab)
 
 ## Components
@@ -35,7 +35,7 @@ GitHub Actions
 ## DR flow
 
 ```
-eu-west-1                                  eu-west-2
+eu-west-1                                  eu-central-1
 ─────────                                  ─────────
 RDS fincorp-db  ──daily backup──▶ primary vault
                                        │ cross-region copy
@@ -45,7 +45,7 @@ RDS fincorp-db  ──daily backup──▶ primary vault
 
 1. **Steady state** — AWS Backup takes a daily snapshot and copies it to the DR vault.
 2. **Simulate failure** — delete the primary `fincorp-db`.
-3. **Recover** — `dr-restore.yml` / `scripts/dr-restore.sh` restores from the DR vault's latest recovery point into the eu-west-2 DB subnet group.
+3. **Recover** — `dr-restore.yml` / `scripts/dr-restore.sh` restores from the DR vault's latest recovery point into the eu-central-1 DB subnet group.
 4. **Validate** — connect and check data; capture timestamps to prove RTO < 30 min.
 
 ## Repo map
@@ -59,7 +59,7 @@ infra/
   bootstrap/               creates fincorp-tfstate bucket + lock table
   live-persistent/         survives the DR drill: backups, ECR+replication, OIDC, CodeArtifact
   live-primary/            live app+data stack, eu-west-1 (module.stack, rds_mode=create)
-  live-dr/                 same stack rebuilt on failover, eu-west-2 (rds_mode=restore)
+  live-dr/                 same stack rebuilt on failover, eu-central-1 (rds_mode=restore)
   modules/
     stack/                 the reusable regional stack (network + eks/* + rds + LB)
     network/ ecr/ rds/ eks/*

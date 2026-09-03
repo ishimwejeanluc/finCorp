@@ -2,7 +2,7 @@ name: dr-restore
 
 # Cross-region Disaster Recovery — FULL region rebuild (manual failover).
 #
-# Rebuilds the entire stack in the DR region (eu-west-2) and lands the database
+# Rebuilds the entire stack in the DR region (eu-central-1) and lands the database
 # next to it, so the recovered app and DB sit together and connect locally:
 #   1. terraform apply infra/live-dr   (VPC, EKS, RDS landing)
 #   2. restore the DB from the latest AWS Backup recovery point INTO that VPC
@@ -65,12 +65,12 @@ jobs:
           # Provisioning the DR stack needs broad rights; use the dedicated
           # provisioner role if set, else fall back to the CI role.
           role-to-assume: ${{ vars.AWS_DR_PROVISIONER_ROLE_ARN || vars.AWS_GHA_ROLE_ARN }}
-          aws-region: eu-west-2
+          aws-region: eu-central-1
 
       - name: Full DR recovery (rebuild infra + restore DB + deploy app)
         env:
           PROJECT: fincorp
-          DR_REGION: eu-west-2
+          DR_REGION: eu-central-1
           NEW_DB_ID: ${{ github.event.inputs.new_db_identifier }}
           REBUILD_INFRA: ${{ github.event.inputs.rebuild_infra }}
           REPLACE: ${{ github.event.inputs.replace }}

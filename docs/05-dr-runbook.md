@@ -1,12 +1,12 @@
 # 5 — DR Runbook (Live Walkthrough)
 
 **Model:** full-region rebuild. On a simulated loss of **eu-west-1**, Terraform
-re-creates the identical stack in **eu-west-2** and the database is restored **into
+re-creates the identical stack in **eu-central-1** and the database is restored **into
 that same VPC**, so the rebuilt app and the restored DB sit together and connect
 locally — no cross-region reach, no peering.
 
 > The cross-region backup copy + ECR image replication run **ahead** of any
-> incident, so a recovery point and the images already exist in eu-west-2 when
+> incident, so a recovery point and the images already exist in eu-central-1 when
 > failure strikes. See [04-dr-setup.md](04-dr-setup.md) to pre-stage them.
 
 ---
@@ -18,15 +18,15 @@ locally — no cross-region reach, no peering.
 terraform -chdir=infra/live-persistent output -raw backup_role_arn
 aws backup list-recovery-points-by-backup-vault \
   --backup-vault-name fincorp-backup-dr \
-  --by-resource-type RDS --region eu-west-2 \
+  --by-resource-type RDS --region eu-central-1 \
   --query 'RecoveryPoints[].{arn:RecoveryPointArn,created:CreationDate,status:Status}'
 
 # Confirm images are replicated to the DR region.
-aws ecr describe-images --repository-name fincorp/backend --region eu-west-2 \
+aws ecr describe-images --repository-name fincorp/backend --region eu-central-1 \
   --query 'imageDetails[].imageTags' --output text
 ```
 ✅ At least one `COMPLETED` recovery point in `fincorp-backup-dr` **and** images
-present in the eu-west-2 ECR.
+present in the eu-central-1 ECR.
 
 ## 1. Simulate the FULL region failure  ⏱️ start the clock
 
@@ -39,7 +39,7 @@ export BACKUP_ROLE_ARN="$(terraform -chdir=infra/live-persistent output -raw bac
 ./scripts/dr-simulate-failure.sh          # asks you to type the project name
 # add --yes to skip the prompt in automation
 ```
-The script refuses to run unless a recovery point exists in eu-west-2, then runs
+The script refuses to run unless a recovery point exists in eu-central-1, then runs
 `terraform -chdir=infra/live-primary destroy`.
 
 ## 2. Recover in the DR region
@@ -69,22 +69,22 @@ export BACKUP_ROLE_ARN="$(terraform -chdir=infra/live-persistent output -raw bac
 
 `dr-restore.sh` runs the whole recovery in order:
 1. `terraform apply infra/live-dr` — rebuilds the VPC, EKS, and the RDS landing
-   (subnet group + SG) in eu-west-2,
+   (subnet group + SG) in eu-central-1,
 2. restores the DB from the latest DR recovery point **into that VPC's subnet group**,
 3. attaches the DR RDS security group + resets the master password to a fresh value,
-4. writes `fincorp/rds/credentials` in eu-west-2,
+4. writes `fincorp/rds/credentials` in eu-central-1,
 5. deploys the app onto the DR cluster (`deploy-eks-k8s.sh`), pulling the
-   **replicated** images from the eu-west-2 ECR and pointing at the **local** DB.
+   **replicated** images from the eu-central-1 ECR and pointing at the **local** DB.
 
 ## 3. Validate  ⏱️ stop the clock
 
 ```bash
 # DB is up and local to the DR VPC:
 aws rds describe-db-instances --db-instance-identifier fincorp-db-restored \
-  --region eu-west-2 --query 'DBInstances[0].{status:DBInstanceStatus,endpoint:Endpoint.Address}'
+  --region eu-central-1 --query 'DBInstances[0].{status:DBInstanceStatus,endpoint:Endpoint.Address}'
 
 # App is running on the DR cluster:
-aws eks update-kubeconfig --name fincorp --region eu-west-2
+aws eks update-kubeconfig --name fincorp --region eu-central-1
 kubectl -n fincorp get pods,svc,ingress
 kubectl -n fincorp get ingress          # ALB hostname to hit
 ```
@@ -100,11 +100,11 @@ kubectl -n fincorp get ingress          # ALB hostname to hit
 | **RTO** | ~25–40 min | from-zero rebuild: EKS control plane (~10–15 min) + nodes/addons + LB controller + app rollout, in parallel with the DB restore |
 
 > This is a **Backup & Restore** posture (AWS's coldest DR strategy) — nothing
-> runs in eu-west-2 until failover, so the RTO is larger than the previous DB-only
+> runs in eu-central-1 until failover, so the RTO is larger than the previous DB-only
 > restore, in exchange for near-zero standing cost and the whole stack living in
 > one region with no cross-region dependency. To shrink RTO you'd move toward a
 > **standby** strategy: *Pilot Light* (a live cross-region RDS read replica) or
-> *Warm Standby* (that plus a minimal always-on EKS node group in eu-west-2) —
+> *Warm Standby* (that plus a minimal always-on EKS node group in eu-central-1) —
 > both at extra standing cost.
 
 ## 4. Fail back / clean up after the demo
@@ -112,7 +112,7 @@ kubectl -n fincorp get ingress          # ALB hostname to hit
 # Tear the DR stack down + remove the restored DB:
 terraform -chdir=infra/live-dr destroy
 aws rds delete-db-instance --db-instance-identifier fincorp-db-restored \
-  --skip-final-snapshot --region eu-west-2
+  --skip-final-snapshot --region eu-central-1
 
 # Rebuild the primary:
 terraform -chdir=infra/live-primary apply

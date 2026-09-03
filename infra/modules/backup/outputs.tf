@@ -7,7 +7,7 @@ output "primary_vault_arn" {
 }
 
 output "dr_vault_name" {
-  description = "DR vault in eu-west-2 - cross-region copies land here; the restore reads from it."
+  description = "DR vault in eu-central-1 - cross-region copies land here; the restore reads from it."
   value       = aws_backup_vault.dr.name
 }
 

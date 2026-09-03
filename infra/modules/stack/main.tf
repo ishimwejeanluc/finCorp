@@ -1,7 +1,7 @@
 # Regional application + data stack: VPC, EKS (cluster/nodes/addons/oidc), RDS,
 # the AWS Load Balancer Controller IRSA, and the data-tier ingress rules.
 # Region-agnostic — the same code stands the stack up in eu-west-1
-# (primary, rds_mode="create") or eu-west-2 (DR, rds_mode="restore").
+# (primary, rds_mode="create") or eu-central-1 (DR, rds_mode="restore").
 
 terraform {
   required_providers {

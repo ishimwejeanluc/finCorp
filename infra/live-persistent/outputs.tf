@@ -33,7 +33,7 @@ output "backup_vault_primary" {
 }
 
 output "backup_vault_dr" {
-  description = "DR backup vault in eu-west-2 — cross-region copies land here; the restore reads from it."
+  description = "DR backup vault in eu-central-1 — cross-region copies land here; the restore reads from it."
   value       = module.backup.dr_vault_name
 }
 

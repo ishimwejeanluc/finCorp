@@ -6,14 +6,14 @@
 # and dependency-blocking resources Terraform can't remove on its own, in the
 # right order so each `terraform destroy` succeeds cleanly:
 #
-#   DR region (eu-west-2)      1. K8s app + Ingress/ALB (frees ENIs/public IPs)
+#   DR region (eu-central-1)      1. K8s app + Ingress/ALB (frees ENIs/public IPs)
 #                             2. DR-restored RDS instance (frees the DB subnet group)
 #                             3. purge stray load balancers + drain ENIs
 #                             4. terraform destroy infra/live-dr
 #   Primary region (eu-west-1) 5. K8s app + Ingress/ALB
 #                             6. purge stray load balancers + drain ENIs
 #                             7. terraform destroy infra/live-primary
-#   Persistent                8. empty ECR repos (primary + eu-west-2 replicas)
+#   Persistent                8. empty ECR repos (primary + eu-central-1 replicas)
 #                             9. delete recovery points in both vaults
 #                            10. terraform destroy infra/live-persistent
 #
@@ -29,7 +29,7 @@
 #   -h, --help          show this help
 #
 # Env overrides:
-#   PROJECT=fincorp  PRIMARY_REGION=eu-west-1  DR_REGION=eu-west-2
+#   PROJECT=fincorp  PRIMARY_REGION=eu-west-1  DR_REGION=eu-central-1
 #   CLUSTER=fincorp  NS=fincorp  RESTORED_DB_ID=fincorp-db-restored
 #
 set -uo pipefail   # NOT -e: cleanup is best-effort; keep going past individual failures
@@ -40,7 +40,7 @@ export AWS_MAX_ATTEMPTS="${AWS_MAX_ATTEMPTS:-10}"
 
 PROJECT="${PROJECT:-fincorp}"
 PRIMARY_REGION="${PRIMARY_REGION:-eu-west-1}"
-DR_REGION="${DR_REGION:-eu-west-2}"
+DR_REGION="${DR_REGION:-eu-central-1}"
 CLUSTER="${CLUSTER:-fincorp}"
 NS="${NS:-fincorp}"
 RESTORED_DB_ID="${RESTORED_DB_ID:-${PROJECT}-db-restored}"
@@ -225,7 +225,7 @@ fi
 
 START=$(date +%s)
 
-# ================= DR region (eu-west-2) =================
+# ================= DR region (eu-central-1) =================
 step "DR region ($DR_REGION)"
 k8s_lb_cleanup "$DR_REGION"
 delete_rds "$RESTORED_DB_ID" "$DR_REGION"        # free the DR DB subnet group
@@ -243,7 +243,7 @@ if [[ "$CLEANUP_ONLY" -ne 1 ]]; then tf_destroy "$PRIMARY_DIR" "live-primary"; f
 # ================= Persistent layer =================
 step "Persistent layer (backups, ECR, OIDC)"
 empty_ecr "$PRIMARY_REGION"
-empty_ecr "$DR_REGION"                            # eu-west-2 replicas
+empty_ecr "$DR_REGION"                            # eu-central-1 replicas
 purge_vault "$PRIMARY_VAULT" "$PRIMARY_REGION"
 purge_vault "$DR_VAULT" "$DR_REGION"
 if [[ "$CLEANUP_ONLY" -eq 1 ]]; then
@@ -251,7 +251,7 @@ if [[ "$CLEANUP_ONLY" -eq 1 ]]; then
 elif [[ "$KEEP_PERSISTENT" -eq 1 ]]; then
   log "--keep-persistent: leaving the persistent layer in place."
 else
-  # eu-west-2 replica repos are auto-created by replication (not in TF state) —
+  # eu-central-1 replica repos are auto-created by replication (not in TF state) —
   # remove them explicitly so nothing is left behind.
   for repo in "${ECR_REPOS[@]}"; do
     aws ecr delete-repository --repository-name "$repo" --region "$DR_REGION" --force >/dev/null 2>&1 \

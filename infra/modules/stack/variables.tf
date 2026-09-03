@@ -1,6 +1,6 @@
 # The regional application + data stack. Instantiated once per region:
 #   - live-primary (eu-west-1, rds_mode = "create")
-#   - live-dr      (eu-west-2, rds_mode = "restore")
+#   - live-dr      (eu-central-1, rds_mode = "restore")
 # The region is governed by the aws provider the root passes in — there is no
 # region variable here; everything derives region from that provider.
 

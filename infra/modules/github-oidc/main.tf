@@ -119,7 +119,7 @@ data "aws_iam_policy_document" "ci" {
 
   # --- EKS: read cluster info for `update-kubeconfig` + deploy ---
   # Wildcard region so the same CI role can drive both the primary (eu-west-1) and
-  # the rebuilt DR (eu-west-2) clusters, which share the project name.
+  # the rebuilt DR (eu-central-1) clusters, which share the project name.
   statement {
     sid       = "EksDescribe"
     effect    = "Allow"

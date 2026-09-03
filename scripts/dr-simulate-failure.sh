@@ -5,20 +5,20 @@
 #
 # This is the "region failure" step of the DR drill. It runs `terraform destroy`
 # against infra/live-primary ONLY — the persistent layer (backup vaults + the DR
-# recovery point, ECR images + their eu-west-2 replica, the GitHub OIDC role) and
+# recovery point, ECR images + their eu-central-1 replica, the GitHub OIDC role) and
 # the Terraform state bucket are in separate states and are left untouched, so
 # there is still something to rebuild + restore from.
 #
 # Recover afterwards with scripts/dr-restore.sh.
 #
 # SAFETY: refuses to run unless a COMPLETED recovery point already exists in the
-# DR vault (eu-west-2) — otherwise you'd have nothing to restore from. Requires an
+# DR vault (eu-central-1) — otherwise you'd have nothing to restore from. Requires an
 # explicit confirmation before destroying.
 #
 # Optional env / flags:
 #   PROJECT          default: fincorp
 #   PRIMARY_REGION   default: eu-west-1
-#   DR_REGION        default: eu-west-2
+#   DR_REGION        default: eu-central-1
 #   DR_VAULT         default: ${PROJECT}-backup-dr
 #   PRIMARY_DIR      default: infra/live-primary
 #   --yes            skip the interactive confirmation (for automation)
@@ -32,7 +32,7 @@ export AWS_MAX_ATTEMPTS="${AWS_MAX_ATTEMPTS:-10}"
 
 PROJECT="${PROJECT:-fincorp}"
 PRIMARY_REGION="${PRIMARY_REGION:-eu-west-1}"
-DR_REGION="${DR_REGION:-eu-west-2}"
+DR_REGION="${DR_REGION:-eu-central-1}"
 DR_VAULT="${DR_VAULT:-${PROJECT}-backup-dr}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PRIMARY_DIR="${PRIMARY_DIR:-${REPO_ROOT}/infra/live-primary}"

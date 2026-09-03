@@ -16,8 +16,8 @@ FRONTEND_REPO="${FRONTEND_REPO:-fincorp/frontend}"
 IMAGE_TAG="${IMAGE_TAG:-}"
 ACCOUNT_ID="${ACCOUNT_ID:-}"
 # Registry host the images are pulled from. Defaults to the account's ECR in the
-# target region — so a DR deploy (AWS_REGION=eu-west-2) pulls the replicated image
-# from the eu-west-2 registry, not the hardcoded eu-west-1 host in the manifest.
+# target region — so a DR deploy (AWS_REGION=eu-central-1) pulls the replicated image
+# from the eu-central-1 registry, not the hardcoded eu-west-1 host in the manifest.
 ECR_REGISTRY="${ECR_REGISTRY:-}"
 
 RDS_SECRET_ID="${RDS_SECRET_ID:-fincorp/rds/credentials}"
@@ -140,7 +140,7 @@ render_and_apply() {
 
   # Rewrite the FULL image reference (registry host + repo + tag) so the deploy is
   # region-portable: the manifest hardcodes the eu-west-1 host, but ECR_REGISTRY
-  # points at whatever region we're deploying into (eu-west-2 on DR failover).
+  # points at whatever region we're deploying into (eu-central-1 on DR failover).
   sed -E "s#image: .*/${BACKEND_REPO}:placeholder#image: ${ECR_REGISTRY}/${BACKEND_REPO}:${btag}#" \
     "$k8s_dir/02-backend-deployment.yaml" > "$tmp/02-backend-deployment.yaml"
   sed -E "s#image: .*/${FRONTEND_REPO}:placeholder#image: ${ECR_REGISTRY}/${FRONTEND_REPO}:${ftag}#" \

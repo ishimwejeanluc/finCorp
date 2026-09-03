@@ -16,12 +16,11 @@ provider "aws" {
 data "aws_caller_identity" "current" {}
 
 locals {
-  bucket_name = "fincorp-tfstate-${data.aws_caller_identity.current.account_id}"
+  bucket_name = "fincorp-tfstate-${data.aws_caller_identity.current.account_id}-eu-west-1"
 }
 
 resource "aws_s3_bucket" "tfstate" {
   bucket = local.bucket_name
-  lifecycle { prevent_destroy = true }
 }
 
 resource "aws_s3_bucket_versioning" "tfstate" {

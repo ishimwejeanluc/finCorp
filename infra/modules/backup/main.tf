@@ -1,7 +1,7 @@
 # Cross-region DR for the primary RDS database, via AWS Backup.
 #
 # Flow: daily backup -> recovery point in the PRIMARY vault -> AWS Backup copies
-# it to the DR vault in eu-west-2. If the primary region is lost, the database is
+# it to the DR vault in eu-central-1. If the primary region is lost, the database is
 # restored from the DR vault's copy (see scripts/dr-restore.sh + dr-restore.yml).
 #
 # Encrypted recovery points can only be copied cross-region when the source is

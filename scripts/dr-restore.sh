@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# dr-restore.sh — FULL cross-region recovery in the DR region (eu-west-2).
+# dr-restore.sh — FULL cross-region recovery in the DR region (eu-central-1).
 #
 # After a simulated full-region failure (scripts/dr-simulate-failure.sh destroyed
-# the whole primary stack), this rebuilds everything in eu-west-2 and lands the
+# the whole primary stack), this rebuilds everything in eu-central-1 and lands the
 # database next to it, so the app and DB sit together and connect locally:
 #
 #   1. terraform apply  infra/live-dr   -> VPC, EKS, RDS landing (subnet
@@ -13,7 +13,7 @@
 #   3. modify-db-instance               -> attach the DR RDS security group (local
 #                                          access from the cluster) + reset the
 #                                          master password to a fresh one.
-#   4. write ${PROJECT}/rds/credentials in eu-west-2 with the new creds.
+#   4. write ${PROJECT}/rds/credentials in eu-central-1 with the new creds.
 #   5. deploy-eks-k8s.sh                -> deploy the app onto the DR cluster,
 #                                          pointing at the LOCAL restored DB.
 #
@@ -21,7 +21,7 @@
 #   BACKUP_ROLE_ARN   AWS Backup service role (terraform -chdir=infra/live-persistent output -raw backup_role_arn)
 # Optional (sensible defaults):
 #   PROJECT           default: fincorp
-#   DR_REGION         default: eu-west-2
+#   DR_REGION         default: eu-central-1
 #   DR_VAULT          default: ${PROJECT}-backup-dr
 #   NEW_DB_ID         default: ${PROJECT}-db-restored
 #   DR_DIR            default: infra/live-dr
@@ -43,7 +43,7 @@ export AWS_RETRY_MODE="${AWS_RETRY_MODE:-standard}"
 export AWS_MAX_ATTEMPTS="${AWS_MAX_ATTEMPTS:-10}"
 
 PROJECT="${PROJECT:-fincorp}"
-DR_REGION="${DR_REGION:-eu-west-2}"
+DR_REGION="${DR_REGION:-eu-central-1}"
 DR_VAULT="${DR_VAULT:-${PROJECT}-backup-dr}"
 NEW_DB_ID="${NEW_DB_ID:-${PROJECT}-db-restored}"
 NAMESPACE="${NAMESPACE:-${PROJECT}}"
