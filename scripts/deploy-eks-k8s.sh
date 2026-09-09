@@ -23,10 +23,15 @@ ECR_REGISTRY="${ECR_REGISTRY:-}"
 RDS_SECRET_ID="${RDS_SECRET_ID:-fincorp/rds/credentials}"
 SKIP_SECRET="${SKIP_SECRET:-0}"
 INCLUDE_INGRESS="${INCLUDE_INGRESS:-1}"
+# The db-migrate Job bootstraps the schema, because RDS does not auto-run
+# db/init/init.sql the way local compose does. Needed on a fresh database; NOT
+# needed after a DR restore, where the recovery point is the source of truth and
+# already carries the schema and the rows. Skip it there with --skip-migrate.
+SKIP_MIGRATE="${SKIP_MIGRATE:-0}"
 # LB controller install is a one-time, helm-based cluster setup. Off by default
 # so CI (which has no helm and shouldn't re-install it every deploy) can apply the
 # ingress without it. Run once locally with --ensure-lb-controller.
-ENSURE_LB_CONTROLLER="${ENSURE_LB_CONTROLLER:-0issue when }"
+ENSURE_LB_CONTROLLER="${ENSURE_LB_CONTROLLER:-0}"
 
 usage() {
   cat <<'EOF'
@@ -45,6 +50,9 @@ Options:
   --account-id <id>             AWS account ID for image URI (default: auto-detect)
   --rds-secret-id <id>          Secrets Manager ID for Postgres creds
   --skip-secret                 Skip creating/updating the fincorp-db Secret
+  --skip-migrate                Skip the db-migrate Job. Use on a DR restore: the
+                                restored DB already holds the schema and data, so
+                                the backup stays the single source of truth.
   --include-ingress             Apply k8s/06-ingress.yaml (default: on)
   --no-ingress                  Do not apply the ingress
   --ensure-lb-controller        Install/upgrade the AWS LB Controller (helm, one-time)
@@ -52,12 +60,13 @@ Options:
 
 Environment variable equivalents:
   AWS_REGION, CLUSTER_NAME, NAMESPACE, IMAGE_TAG, ACCOUNT_ID, RDS_SECRET_ID,
-  SKIP_SECRET=1, INCLUDE_INGRESS=1, ENSURE_LB_CONTROLLER=1
+  SKIP_SECRET=1, SKIP_MIGRATE=1, INCLUDE_INGRESS=1, ENSURE_LB_CONTROLLER=1
 
 Examples:
   scripts/deploy-eks-k8s.sh --image-tag "$GIT_SHA"          # used by the pipeline
   scripts/deploy-eks-k8s.sh --ensure-lb-controller          # first-time cluster setup
   scripts/deploy-eks-k8s.sh --skip-secret                   # redeploy latest image
+  scripts/deploy-eks-k8s.sh --skip-migrate                  # DR restore: trust the backup
 EOF
 }
 
@@ -150,7 +159,15 @@ render_and_apply() {
   kubectl apply -f "$tmp/03-backend-service.yaml"
   kubectl apply -f "$tmp/04-frontend-deployment.yaml"
   kubectl apply -f "$tmp/05-frontend-service.yaml"
-  kubectl apply -f "$tmp/07-db-migrate.yaml"
+
+  # A DR restore recovers the schema and the rows with the snapshot, so the
+  # bootstrap Job has nothing to do there — and skipping it keeps the recovery
+  # point the only thing that can have supplied the data.
+  if ! bool_true "$SKIP_MIGRATE"; then
+    kubectl apply -f "$tmp/07-db-migrate.yaml"
+  else
+    echo "Skipping db-migrate Job (SKIP_MIGRATE=$SKIP_MIGRATE) — data comes from the restore"
+  fi
 
   if bool_true "$INCLUDE_INGRESS"; then
     kubectl apply -f "$tmp/06-ingress.yaml"
@@ -233,6 +250,10 @@ parse_args() {
         ;;
       --skip-secret)
         SKIP_SECRET="1"
+        shift
+        ;;
+      --skip-migrate)
+        SKIP_MIGRATE="1"
         shift
         ;;
       --include-ingress)

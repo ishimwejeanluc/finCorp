@@ -241,6 +241,7 @@ if is_true "$DEPLOY_APP"; then
   NAMESPACE="$NAMESPACE" \
   RDS_SECRET_ID="$CRED_SECRET_ID" \
   ENSURE_LB_CONTROLLER="${ENSURE_LB_CONTROLLER:-1}" \
+  SKIP_MIGRATE="${SKIP_MIGRATE:-1}" \
     "$REPO_ROOT/scripts/deploy-eks-k8s.sh"
 else
   log "DEPLOY_APP=0 — skipping the kubectl deploy."
